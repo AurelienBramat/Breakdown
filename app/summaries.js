@@ -87,7 +87,7 @@ if (require.main === module) {
       r[pid] = { routes: Object.values(pl.ents).filter(e => e.team === teams[0]).map(e => +e.id), defs: Object.values(pl.ents).filter(e => e.team === teams[1]).map(e => +e.id) }; }
     return r; };
   const roles = Object.fromEntries(ids.map(id => [id, rolesFor(id)]));
-  const cacheFile = path.join(os.tmpdir(), `gr-summary-selfcheck-${process.pid}.json`);
+  const cacheFile = path.join(os.tmpdir(), `breakdown-summary-selfcheck-${process.pid}.json`);
   (async () => {
     const S = createSummaries({ gameIds: ids, rolesFor: id => roles[id], fileFor, cacheFile, threads: 2, log: () => {} });
     const order = [];

@@ -1,8 +1,8 @@
-# Gridiron Replay
+# Breakdown
 
 **Rewatch any NFL pass play like a coach, then change it and see how the defense would have reacted.**
 
-Gridiron Replay turns raw NFL player-tracking data (every player's position 10 times a second) into a football-manager-style 2D replay. You can scrub through a play, see who was open, who pressured the QB and what coverage the defense called. Then you can give a receiver a different route, or switch the defense's call, and watch a simulated version of the same snap play out. The defense reacts based on how that team actually plays.
+Breakdown turns raw NFL player-tracking data (every player's position 10 times a second) into a football-manager-style 2D replay. You can scrub through a play, see who was open, who pressured the QB and what coverage the defense called. Then you can give a receiver a different route, or switch the defense's call, and watch a simulated version of the same snap play out. The defense reacts based on how that team actually plays.
 
 > Built for the AWS × NFL hackathon on the NFL Big Data Bowl dataset (2021 season, weeks 1–8).
 
@@ -75,7 +75,7 @@ A working prototype covering 122 games and 8,557 pass plays, with replay, scouti
 
 | Area | What you can do |
 |---|---|
-| **First-visit tour** | New visitors are asked "fan or coach?" and get a spotlight walkthrough: **fans** (8 steps, ~1 min) see how to find and watch plays, read who was open, and try a what-if; **coaches** (12 steps, ~2 min) also get the what-if tools, comparing play calls, scouting reports and how far to trust the simulator. Next/Back or ←/→, Esc to skip. It shows once; **❓ Tour** in the header replays it. |
+| **First-visit tour** | New visitors are asked "fan or coach?" and get a spotlight walkthrough: **fans** (9 steps, ~1 min) see how to find and watch plays, read who was open, and try a what-if; **coaches** (13 steps, ~2 min) also get the what-if tools, comparing play calls, scouting reports and how far to trust the simulator. Both tours make the visitor **click the What-if tab themselves** (the tour waits, with an "Open it for me" fallback), because testers missed it when the tour opened it for them. Until What-if has been opened once, its tab carries a pulsing **Try it** badge. Next/Back or ←/→, Esc to skip. It shows once; **❓ Tour** in the header replays it. |
 | **Header** | Pick a game. The scoreboard shows the score, quarter, clock, down and distance, ball spot and possession. |
 | **Left: play list** | Search ("Brady", "deep", "Cover-1"), quick filters (3rd down, Red zone, Big play 20+, TD, Sack, INT, Incomplete), and filters by quarter (Q1–Q4, OT) and by offense. Each play has a result badge. |
 | **Centre: field** | Auto-zoom camera, with the offense always attacking left → right. Hover a player for his name; click him for details. Toggles: Names, Route chart, Who's open (green ≥ 3 yds, yellow 1.5–3, red < 1.5), Trails, Full field. After the throw, the rest of the play is reconstructed (labelled on screen) and the real result spot is marked with ✕. |

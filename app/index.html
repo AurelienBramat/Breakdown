@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gridiron Replay</title>
+<title>Breakdown</title>
 <style>
   :root { --bg:#0d1216; --panel:#151d23; --panel2:#1b252d; --line:#26333d; --text:#e6edf2; --mute:#8798a5; --acc:#f5b82e; --good:#3fbf7f; --warn:#e8b33a; --bad:#e5544b; }
   * { box-sizing:border-box; } [hidden] { display:none !important; }
@@ -110,6 +110,10 @@
   .paths button { display:flex; flex-direction:column; align-items:center; gap:4px; padding:16px 12px; border-radius:12px; white-space:normal; background:var(--panel2); }
   .paths button:hover { border-color:var(--acc); background:#22303a; } .paths span { font-size:28px; } .paths b { font-size:15px; } .paths small { color:var(--mute); }
   .welcome a { color:var(--mute); } @media (max-width:560px) { .paths { grid-template-columns:1fr; } }
+  .try { font-size:10px; font-weight:700; background:var(--acc); color:#111; border-radius:8px; padding:1px 6px; margin-left:4px; animation:tryPulse 1.6s ease-in-out infinite; }
+  @keyframes tryPulse { 50% { box-shadow:0 0 0 5px rgba(245,184,46,.25); } }
+  #tourShade.pulse { animation:ringPulse 1.4s ease-in-out infinite; } @keyframes ringPulse { 50% { outline-color:#fff; outline-offset:4px; } }
+  @media (prefers-reduced-motion: reduce) { .try, #tourShade.pulse { animation:none; } }
   ul.style { margin:0; padding-left:18px; line-height:1.8; } ul.style b { color:var(--acc); }
   .barrow span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .controls { position:sticky; bottom:0; z-index:3; background:var(--bg); padding:8px 0; border-top:1px solid var(--line); }
@@ -128,7 +132,7 @@
 </head>
 <body>
 <header>
-  <h1>GRIDIRON <span>REPLAY</span></h1>
+  <h1>BREAK<span>DOWN</span></h1>
   <select id="game"></select>
   <button id="scoutBtn" title="Team and player tendencies over one or more games">📊 Scouting</button>
   <button id="helpBtn" title="Show the tutorial again">❓ Tour</button>
@@ -179,7 +183,7 @@
 </main>
 
 <aside id="right">
-  <div id="tabs"><button data-t="play" class="on">Play</button><button data-t="whatif">What-if</button><button data-t="defense">Defense</button></div>
+  <div id="tabs"><button data-t="play" class="on">Play</button><button data-t="whatif">What-if <span id="tryBadge" class="try" hidden>Try it</span></button><button data-t="defense">Defense</button></div>
   <div class="tab on" id="tab-play"><p class="muted">Pick a play from the list.</p></div>
   <div class="tab" id="tab-whatif"><p class="muted">Pick a play first, then change a route here and watch how the defense reacts.</p></div>
   <div class="tab" id="tab-defense"><p class="muted">Pick a play to see how this defense usually plays.</p></div>
@@ -187,7 +191,7 @@
 
 <div id="tourShade" hidden></div><div id="tourCard" hidden role="dialog" aria-live="polite"></div>
 <div id="tourWelcome" hidden role="dialog" aria-label="Welcome"><div class="welcome">
-  <div style="font-size:34px">🏈</div><h2>Welcome to Gridiron Replay</h2>
+  <div style="font-size:34px">🏈</div><h2>Welcome to Breakdown</h2>
   <p class="muted">Rewatch every NFL pass play like a coach, then change it and see what would have happened. Want a quick tour?</p>
   <div class="paths">
     <button data-path="fan"><span>🏟</span><b>I'm a fan</b><small>Watch plays, see who was open, try your own what-if · 1 min</small></button>
@@ -209,6 +213,8 @@ let sel = null, hover = null, view = null, filter = 'All', offFilter = 'All', qF
 const show = { names: false, routes: true, sep: true, trails: false, full: false };
 const wi = { sel: null, mode: null, edits: {}, route: {}, align: {}, assign: {}, cov: 'played', depth: 1, throwAt: null, throwTo: null };
 const hist = []; // undo stack of what-if snapshots
+// the app was called "Gridiron Replay": move saved scenarios / tour state to the new storage keys once
+try { for (const k of ['scenarios', 'tour-done', 'whatif-seen']) { const old = localStorage.getItem('gridiron-' + k); if (old != null && localStorage.getItem('breakdown-' + k) == null) localStorage.setItem('breakdown-' + k, old); localStorage.removeItem('gridiron-' + k); } } catch { /* storage blocked: nothing to move */ }
 let sim = null, viewSim = false;
 
 const api = p => fetch(p).then(r => r.json());
@@ -590,12 +596,14 @@ document.onkeydown = e => {
 };
 
 // ================= tabs =================
-$('#tabs').onclick = e => { const t = e.target.dataset.t; if (!t) return; setTab(t); };
+$('#tabs').onclick = e => { const t = e.target.closest('[data-t]')?.dataset.t; if (!t) return; setTab(t); };
 function setTab(t) {
   tab = t; $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t)); $$('.tab').forEach(d => d.classList.toggle('on', d.id === 'tab-' + t));
   if (t === 'whatif' && cur && !sim) seek(cur.S);
   if (cur) renderResults();
   draw();
+  if (t === 'whatif') { $('#tryBadge').hidden = true; try { localStorage.setItem('breakdown-whatif-seen', '1'); } catch { /* fine */ } }
+  if (tour?.steps[tour.i].waitTab === t) { tour.i++; showStep(); }
 }
 
 // ================= field mouse: hover, select, drag alignments and route points, place zones =================
@@ -660,7 +668,7 @@ function resetWi() { Object.assign(wi, { sel: null, mode: null, edits: {}, route
 function change(fn) { hist.push(snapWi()); fn(); rerun(); }
 function undo() { if (!hist.length) return; Object.assign(wi, JSON.parse(hist.pop()), { mode: null }); rerun(); }
 const isActive = () => Object.values(wi.edits).some(p => p.length) || Object.keys(wi.align).length || Object.keys(wi.assign).length || wi.cov !== 'played' || wi.throwAt != null || wi.throwTo != null;
-const SKEY = 'gridiron-scenarios';
+const SKEY = 'breakdown-scenarios';
 const savedAll = () => { try { return JSON.parse(localStorage.getItem(SKEY)) || {}; } catch { return {}; } };
 const playKey = () => `${cur.play.gameId}-${cur.play.playId}`;
 function storeSaved(list) { const all = savedAll(); all[playKey()] = list; try { localStorage.setItem(SKEY, JSON.stringify(all)); } catch { /* private mode: scenarios last for this session only */ } }
@@ -1408,7 +1416,7 @@ $('#scoutBody').onclick = async e => {
 $('#scoutBtn').onclick = () => document.body.classList.contains('scouting') ? closeScout() : openScout();
 $('#board').onclick = e => { const t = e.target.closest('.team'); if (t) openScout({ kind: 'team', team: t.dataset.team, side: t.dataset.team === cur.play.possessionTeam ? 'off' : 'def', games: [] }); };
 // ================= first-visit tour: a spotlight walkthrough, one path for fans and one for coaches =================
-const TOUR_KEY = 'gridiron-tour-done';
+const TOUR_KEY = 'breakdown-tour-done';
 const tourBase = [
   { el: '#left', title: 'Pick a play', text: 'Every pass play from weeks 1–8 of the 2021 season. Use the chips on top to find what you care about: <b>3rd down</b>, <b>Red zone</b>, <b>Big plays</b>, <b>TDs</b>, <b>Sacks</b>, a quarter or one team\'s offense.' },
   { el: '#stage', title: 'Watch it like a coach', text: 'Real player tracking, 10 times a second. The offense always attacks <b>left → right</b>. Hover a player for his name, click him for details. The ball is the one with the <b style="color:#ffd600">yellow halo</b>.' },
@@ -1416,11 +1424,15 @@ const tourBase = [
   { el: '.toggles', title: 'See what the QB saw', text: '<b>Route chart</b> draws every route. <b>Who\'s open</b> puts a ring on each receiver: <span class="good">green</span> = open (3+ yds), <span class="warn">yellow</span> = tight, <span class="bad">red</span> = covered.' },
   { el: '#right', title: 'The story of the play', text: 'Formation, coverage, who pressured the QB, and a step-by-step <b>play story</b>: click any step to jump there. Steps marked * are rebuilt from the play-by-play, because the tracking stops at the throw.', before: () => setTab('play') },
 ];
+// the person clicks the tab themselves (testers missed it when the tour opened it for them)
+const openWhatIf = { el: '[data-t="whatif"]', title: 'Open the What-if tab', text: 'This is where you <b>play coach</b>: change the play and see what would have happened. 👉 <b>Click the What-if tab</b>, highlighted up here, to open it.', waitTab: 'whatif', before: () => setTab('play') };
 const tourFan = [
-  { el: '[data-t="whatif"]', title: 'Play coach: what if…?', text: 'Click a receiver, tap a route like <b>Post</b> or <b>Slant</b>, and watch the defense react. It replays instantly and tells you if he\'d have been open. Try it on any play!', before: () => setTab('whatif') },
+  openWhatIf,
+  { el: '#tab-whatif', title: 'Play coach: what if…?', text: 'Click a receiver, tap a route like <b>Post</b> or <b>Slant</b>, and watch the defense react. It replays instantly and tells you if he\'d have been open. Try it on any play!', before: () => { setTab('whatif'); seek(cur.S); } },
   { el: '#board', title: 'How does this team play?', text: 'Click a team on the scoreboard for its <b>scouting report</b>: how often they throw deep, blitz, who they target… in plain words.', before: () => setTab('play') },
 ];
 const tourCoach = [
+  openWhatIf,
   { el: '#tab-whatif .step:nth-of-type(1)', title: 'What-if: change any player', text: 'Pick any player here or on the field. <b>Offense:</b> a route from the route tree (or draw one and drag its points). <b>Defense:</b> blitz, man on a receiver of your choice, or a zone drop to a spot you click. At the snap, <b>drag anyone</b> to change his alignment.', before: () => { setTab('whatif'); seek(cur.S); } },
   { el: '#tab-whatif .step:nth-of-type(3)', title: 'Change the defense call', text: 'Replay the snap against a different coverage: as called, <b>their usual</b> (from this team’s real tendencies on this down), man or zone. The defenders re-react with their real speed.', before: () => setTab('whatif') },
   { el: '#tab-whatif .step:nth-of-type(4)', title: 'Coach the quarterback', text: 'Set <b>when</b> he throws with the slider and <b>who</b> he throws to (or let him find the most open man). Throw early to beat a blitz, or hold it too long and get sacked.', before: () => setTab('whatif') },
@@ -1456,7 +1468,8 @@ function placeStep() {
   card.innerHTML = `<div class="muted" style="font-size:11px">${tour.path === 'coach' ? '📋 Coach tour' : '🏟 Fan tour'} · ${tour.i + 1} / ${tour.steps.length}</div>
     <b style="font-size:15px;display:block;margin:4px 0 6px">${s.title}</b><div>${s.text}</div>
     <div class="row" style="margin-top:12px"><a href="#" data-tour="skip" class="muted">Skip tour</a><span style="margin-left:auto"></span>
-      ${tour.i ? '<button data-tour="back">Back</button>' : ''}<button data-tour="next" class="on">${tour.i === tour.steps.length - 1 ? 'Done' : 'Next'}</button></div>`;
+      ${tour.i ? '<button data-tour="back">Back</button>' : ''}<button data-tour="next" class="on">${s.waitTab ? 'Open it for me' : tour.i === tour.steps.length - 1 ? 'Done' : 'Next'}</button></div>`;
+  shade.classList.toggle('pulse', !!s.waitTab);
   card.hidden = false;
   // put the card where there is room and it hides nothing: tall areas get it beside them, others below / above
   // candidates: beside the area (the card may narrow to 260px to fit) or below / above it
@@ -1477,6 +1490,7 @@ function placeStep() {
 $('#tourCard').onclick = e => {
   const a = e.target.closest('[data-tour]'); if (!a) return; e.preventDefault();
   if (a.dataset.tour === 'skip') return endTour();
+  if (a.dataset.tour === 'next' && tour.steps[tour.i].waitTab) return setTab(tour.steps[tour.i].waitTab); // setTab moves the tour on
   if (a.dataset.tour === 'back') tour.i--; else if (tour.i === tour.steps.length - 1) return endTour(); else tour.i++;
   showStep();
 };
@@ -1495,6 +1509,7 @@ document.addEventListener('keydown', e => {
 addEventListener('resize', () => tour && placeStep());
 function openWelcome() { if (document.body.classList.contains('scouting')) closeScout(); closeCompare(true); playing = false; syncPlay(); $('#tourWelcome').hidden = false; }
 $('#helpBtn').onclick = openWelcome;
+try { if (!localStorage.getItem('breakdown-whatif-seen')) $('#tryBadge').hidden = false; } catch { $('#tryBadge').hidden = false; }
 // first visit: offer the tour once the first play is on screen
 (async function firstVisit() {
   let seen = false; try { seen = !!localStorage.getItem(TOUR_KEY); } catch { /* treat as new */ }
