@@ -38,6 +38,7 @@ A browser app that does three things:
 2. **Scouting:** each defense's tendencies, computed from real snaps. For example: "Dallas plays man 45% of the time on 3rd down, blitzes on 26% of snaps, and Cover-1 is its favourite call."
 3. **What-if simulation:** coaches can change almost anything about the play. Give any receiver a new route (route tree, or draw one and drag its points), move any player's pre-snap alignment, send any defender on a blitz, put him in man on a receiver you pick or drop him into a zone spot you click, switch the coverage call, and choose when the QB throws and to whom. The play re-simulates instantly through to the outcome (sack, catch, breakup or interception, then the run after the catch), and every scenario can be undone or saved.
 4. **Compare:** put the real play, the current what-if and any saved scenarios side by side. They play in sync on mini fields, with a scorecard table (result, yards, time to throw, target, most open receiver) and a 🏆 on the best result. A coach can test three play calls against the same defense and see which one wins.
+5. **Scouting reports:** tendencies and a plain-language playstyle summary for any team (offense or defense) or any player, over one game, several or all of them. A coordinator can see how an opponent really plays: how often they blitz, which coverage they lean on and where it leaks, who they target and where, and which pass rusher gets home. Every number links back to the plays behind it.
 
 ### Why it's different
 - **Interactive, not passive:** the what-if engine is the core feature. Most analytics tools describe a play; this one lets you rerun it with changes.
@@ -82,6 +83,7 @@ A working prototype covering 122 games and 8,557 pass plays, with replay, scouti
 | **Right: What-if tab** | 1) Pick any player (chips or click the field). 2) Offense: a route from the route tree (15 routes, short/normal/deep) or draw your own, then drag the gold points to fine-tune. Defense: as played / blitz / man on a receiver / zone drop (click the spot). Drag any player at the snap to change his alignment. 3) Defense call. 4) Quarterback: throw time slider and throw target (or "best open"). 5) Scenario: a list of every change (✕ removes one), Undo (also Ctrl+Z), Reset, and Save / load named scenarios (kept in your browser). A results card under the field shows the simulated outcome vs the real one, plus each receiver's separation. |
 | **Compare view** | From the What-if tab, **⚖ Compare** opens the real play, the current what-if and every saved scenario for this snap side by side (up to 4 shown at once; toggle any on or off). One set of controls plays them all in sync. The table underneath compares result, yards, ball-out time, target and its separation (marked *auto* when the QB picked the most open man), most open receiver and number of changes. 🏆 marks the best result: most yards, a TD +10, a sack −5, an interception counts as −30. |
 | **Right: Defense tab** | The team's man/zone split (overall and on this down), average rushers, blitz rate, box count and coverage-call distribution. |
+| **📊 Scouting** (header button, or click a team on the scoreboard) | Pick **Team** (offense / defense) or **Player** (type a name), then the games: all, one, or any mix. **Team offense:** playstyle summary vs the league, completion %, yds/att, TD/INT, sack and pressure rate, time to throw, deep and play-action rates, 3rd-down conversion, how open the target was, a pass map (deep/short × left/middle/right), coverages faced and results against each, formations, personnel, by-down table, receivers (routes, targets, catches, yards, target share, average separation) and pass protection (pressures allowed). **Team defense:** the same from the other side, plus man/zone and blitz rates, rushers, pass-rusher table and coverage table (targets allowed as the nearest defender). **Player:** jobs on pass plays, where he lines up (in plain words), and passing, receiving, pass rush, protection or coverage numbers depending on what he does. Names link to player reports; the biggest plays open in the replay. |
 
 **Keyboard:** `Space` play/pause · `←` `→` step a frame · `S` snap · `T` throw · `N` / `P` next/previous play.
 
@@ -191,6 +193,9 @@ All endpoints are `GET` and return JSON.
 | `/api/plays?game=<gameId>` | All plays of a game (the `plays.csv` rows) |
 | `/api/play?game=<gameId>&play=<playId>` | `{ play, dir, nFrames, events: {frame: name}, ents: [...] }` |
 | `/api/team?t=<abbr>` | Defensive tendencies: `{ all, byDown: {1..4} }`, each `{ n, man, zone, rush, blitz, box, cov: {call: count} }` |
+| `/api/players` | Every player who appears in the PFF data: `{ id, name, pos, team }` |
+| `/api/report?team=<abbr>&side=off\|def&games=<id,id>` | Team scouting report: `{ stats, league, leaders, top, games, selected }`. `games` is optional (default: all of the team's games) |
+| `/api/report?player=<nflId>&games=<id,id>` | Player scouting report: `{ player, snaps, roles, aligned, me, grid, qb, league, top }` |
 
 Each entity in `ents` looks like `{ id, jersey, team, name, pos, role, lined, hit, hurry, sack, beaten, blocked, f: [[x, y, speed, orientation, direction], …] }`, with one entry in `f` per frame. The ball has `id: "ball"`.
 
@@ -201,6 +206,7 @@ Each entity in `ents` looks like `{ id, jersey, team, name, pos, role, lined, hi
 ```
 app/
   server.js        Node stdlib HTTP server: CSV parsing, team tendencies, tracking cache, JSON API
+  report.js        Scouting engine: parses targets/results from the play-by-play, aggregates team, player and league stats, tracking summaries (time to throw, separation) per game; self-check: node app/report.js
   index.html       Whole front-end: layout/CSS, canvas renderer, playback, what-if UI and engine
 nfl-big-data-bowl-regional-event-data-main/
   data/            Big Data Bowl CSVs (+ tracking/ per game)
@@ -214,6 +220,7 @@ Where to change things in `index.html`:
 - Simulation: `simulate()` (defender jobs, sack check, throw outcome thresholds) and its constants `LAG`, `DT`, `AMAX`; shared movement physics: `kin()`; drawn routes: `routeTrack()`
 - What-if panel and scenario state (undo, save/load): `renderWhatIf()`, `change()`, `undo()`, `snapWi()`
 - Compare view: `openCompare()`, `summary()` (scorecard and ranking), `renderCompare()`, `drawInto()` (draws one scenario into its mini field)
+- Scouting view: `openScout()`, `renderScout()`, `playstyle()` (the summary sentences and their thresholds vs the league), `alignLabel()` (PFF alignment codes → words); the stats themselves live in `app/report.js`
 - Post-throw reconstruction: `reconstruct()` (description parsing: `findPlayer()`, `spotX()`, the `NAME` regex)
 - Play story timeline: `playStory()`
 - Play filters: the `FILTERS` object
@@ -226,6 +233,7 @@ Where to change things in `index.html`:
 - **Tracking covers only about 0.7 s before the snap to 0.5 s after the throw or sack**, because the dataset was built to study pass rushing. The rest of each play (ball flight, catch or incompletion or interception, run after the catch, tackle) is reconstructed in `reconstruct()` from the play-by-play text: the target, tackler, interceptor and the official yardage and spots. The end result is real; the path to it is approximate, and it is labelled "reconstructed" on screen.
 - **What-if outcomes are heuristic.** See "How good is it?" above. Linemen keep their real blocks; they don't re-target a new blitzer.
 - **Heuristic defense:** the rules above are plausible, not validated. Pass rushers and blockers aren't re-simulated.
+- **Scouting covers pass plays only** (the dataset has no runs), so "3rd-down conversion" and "yds/play" are on dropbacks. Targets and results come from the play-by-play text; "nearest defender" coverage numbers approximate who was responsible.
 - **Single process and in-memory cache.** That's fine for a demo, but not multi-tenant.
 
 ## Roadmap

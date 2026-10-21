@@ -89,6 +89,8 @@ function playPayload(gameId, playId) {
   return { play: plays.find(p => p.gameId === gameId && p.playId === playId), dir: tr.dir, nFrames: tr.nFrames, events: tr.events, ents };
 }
 
+const reports = require('./report').createReports({ games, plays, players, pff, tracking });
+
 const json = (res, o) => { res.writeHead(o ? 200 : 404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
 
 http.createServer((req, res) => {
@@ -99,6 +101,13 @@ http.createServer((req, res) => {
     if (u.pathname === '/api/plays') return json(res, plays.filter(x => x.gameId === g));
     if (u.pathname === '/api/play') return json(res, playPayload(g, p));
     if (u.pathname === '/api/team') return json(res, teams[u.searchParams.get('t')]);
+    if (u.pathname === '/api/players') return json(res, reports.playerList);
+    if (u.pathname === '/api/report') {
+      const ids = (u.searchParams.get('games') || '').split(',').filter(Boolean).map(Number);
+      const t = u.searchParams.get('team'), id = +u.searchParams.get('player');
+      if (t && !teams[t]) return json(res, null);
+      return json(res, t ? reports.teamReport(t, u.searchParams.get('side') === 'def' ? 'def' : 'off', ids) : id ? reports.playerReport(id, ids) : null);
+    }
     if (u.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html' }); return fs.createReadStream(path.join(__dirname, 'index.html')).pipe(res); }
     json(res, null);
   } catch (e) { console.error(e); res.writeHead(500); res.end(String(e.message)); }

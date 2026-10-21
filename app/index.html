@@ -85,6 +85,20 @@
   .verdict { font-size:11px; font-weight:700; padding:1px 7px; border-radius:10px; }
   .verdict.open { background:var(--good); color:#06180e; } .verdict.tight { background:var(--warn); color:#111; } .verdict.covered { background:var(--bad); color:#fff; }
   .headline { font-size:15px; font-weight:600; }
+  body.scouting main { grid-column:2 / -1; } body.scouting #right { display:none; }
+  body.scouting main > :not(#scout) { display:none !important; }
+  #board .team { cursor:pointer; } #board .team:hover { outline:1px solid var(--acc); }
+  #scout .headline { font-size:18px; margin:12px 0 4px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:8px; margin-top:10px; }
+  .tile { background:var(--panel2); border:1px solid var(--line); border-radius:9px; padding:8px 10px; display:flex; flex-direction:column; }
+  .tile span { color:var(--mute); font-size:11.5px; } .tile b { font-size:20px; } .tile small { color:var(--mute); font-size:11px; min-height:14px; }
+  .cols { display:grid; grid-template-columns:repeat(auto-fill, minmax(380px, 1fr)); gap:10px; margin-top:2px; }
+  .cols .card .ctable { margin-top:6px; }
+  .pmap { display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; }
+  .pmap div { border-radius:7px; padding:8px; display:flex; flex-direction:column; align-items:center; border:1px solid var(--line); }
+  .pmap small { color:var(--mute); font-size:11px; } .pmap b { font-size:20px; } .pmap span { font-size:11.5px; }
+  ul.style { margin:0; padding-left:18px; line-height:1.8; } ul.style b { color:var(--acc); }
+  .barrow span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .controls { position:sticky; bottom:0; z-index:3; background:var(--bg); padding:8px 0; border-top:1px solid var(--line); }
   .cgrid { display:grid; gap:10px; }
   .ccell { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:8px; display:flex; flex-direction:column; gap:6px; }
@@ -103,6 +117,7 @@
 <header>
   <h1>GRIDIRON <span>REPLAY</span></h1>
   <select id="game"></select>
+  <button id="scoutBtn" title="Team and player tendencies over one or more games">📊 Scouting</button>
   <div id="board"></div>
 </header>
 
@@ -118,6 +133,7 @@
 </aside>
 
 <main>
+  <div id="scout" hidden><div id="scoutBar" class="card" style="margin-top:0"></div><div id="scoutBody"></div></div>
   <div id="stage">
     <canvas id="field"></canvas>
     <div id="modeBadge" hidden><button data-m="real">Original</button><button data-m="sim">What-if</button></div>
@@ -265,7 +281,7 @@ function step(d) { const i = shown.findIndex(p => p.playId === cur?.play.playId)
 // ================= header scoreboard =================
 function renderBoard() {
   const p = cur.play, g = games.find(g => g.gameId === p.gameId);
-  const t = (abbr, score) => `<span class="team ${abbr === p.possessionTeam ? 'poss' : ''}"><i style="background:${COLORS[abbr]}"></i>${abbr} <b>${score}</b></span>`;
+  const t = (abbr, score) => `<span class="team ${abbr === p.possessionTeam ? 'poss' : ''}" data-team="${abbr}" title="Scouting report: ${abbr}"><i style="background:${COLORS[abbr]}"></i>${abbr} <b>${score}</b></span>`;
   $('#board').innerHTML = t(g.visitorTeamAbbr, p.preSnapVisitorScore) + t(g.homeTeamAbbr, p.preSnapHomeScore) +
     `<span class="sit">Q${p.quarter} · ${p.gameClock}</span><span class="sit"><em>${p.down}${ORD[p.down]} & ${p.yardsToGo}</em> · ball on ${p.yardlineSide || ''} ${p.yardlineNumber}</span>
      <span class="sit">${p.possessionTeam} ball →</span>`;
@@ -1174,6 +1190,174 @@ function reconstruct() {
   if (endFrame != null && carrier && endPt) cur.events[endFrame] = isTD(p) ? 'touchdown' : / ob at /.test(d) ? 'out_of_bounds' : 'tackle';
   cur.recon = { start: n0, endPt: carrier ? endPt : null, carrier, tackler, target, catchPt, kind };
 }
+// ================= scouting: team and player tendencies over one or more games =================
+const scout = { kind: 'team', team: null, side: 'off', player: null, games: [], data: null };
+let playerIndex = null;
+async function openScout(opts = {}) {
+  Object.assign(scout, opts);
+  if (!scout.team) scout.team = cur?.play.possessionTeam || games[0].homeTeamAbbr;
+  playerIndex ||= await api('/api/players');
+  document.body.classList.add('scouting'); $('#scout').hidden = false; playing = false; syncPlay();
+  await loadScout();
+}
+function closeScout() { document.body.classList.remove('scouting'); $('#scout').hidden = true; resize(); }
+async function loadScout() {
+  const g = scout.games.join(',');
+  const url = scout.kind === 'team' ? `/api/report?team=${scout.team}&side=${scout.side}&games=${g}` : `/api/report?player=${scout.player}&games=${g}`;
+  $('#scoutBody').innerHTML = '<p class="muted">Crunching the numbers…</p>';
+  renderScoutBar();
+  scout.data = await api(url);
+  renderScout();
+}
+const TEAMS = () => [...new Set(games.flatMap(g => [g.homeTeamAbbr, g.visitorTeamAbbr]))].sort();
+function renderScoutBar() {
+  const d = scout.data, avail = d?.games || [];
+  const gname = g => { const me = scout.kind === 'team' ? scout.team : d?.player?.team; const opp = g.homeTeamAbbr === me ? g.visitorTeamAbbr : g.homeTeamAbbr;
+    return `Wk ${g.week} ${g.homeTeamAbbr === me ? 'vs' : '@'} ${opp}`; };
+  $('#scoutBar').innerHTML = `
+    <div class="row"><b style="font-size:15px">📊 Scouting</b>
+      <span class="chips"><button data-sk="team" class="${scout.kind === 'team' ? 'on' : ''}">Team</button><button data-sk="player" class="${scout.kind === 'player' ? 'on' : ''}">Player</button></span>
+      ${scout.kind === 'team' ? `<select id="scTeam">${TEAMS().map(t => `<option ${t === scout.team ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <span class="chips"><button data-side="off" class="${scout.side === 'off' ? 'on' : ''}">Offense</button><button data-side="def" class="${scout.side === 'def' ? 'on' : ''}">Defense</button></span>`
+      : `<input id="scPlayer" list="scPlayers" placeholder="Type a player name…" style="min-width:240px" value="${esc(d?.player?.name || '')}">
+         <datalist id="scPlayers">${playerIndex.map(p => `<option value="${esc(p.name)}">${p.pos} · ${p.team}</option>`).join('')}</datalist>`}
+      <button id="scClose" style="margin-left:auto">✕ Back to replay</button></div>
+    ${avail.length ? `<div class="chips" style="margin-top:8px"><span class="muted" style="align-self:center">Games:</span>
+      <button data-sg="all" class="${!scout.games.length ? 'on' : ''}">All ${avail.length}</button>
+      ${avail.map(g => `<button data-sg="${g.gameId}" class="${scout.games.includes(g.gameId) ? 'on' : ''}">${gname(g)}</button>`).join('')}</div>` : ''}`;
+}
+$('#scoutBar').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.id === 'scClose') return closeScout();
+  if (b.dataset.sk) { scout.kind = b.dataset.sk; scout.games = []; if (scout.kind === 'player' && !scout.player) { renderScoutBar(); $('#scoutBody').innerHTML = '<p class="muted">Pick a player above.</p>'; return; } return loadScout(); }
+  if (b.dataset.side) { scout.side = b.dataset.side; return loadScout(); }
+  if (b.dataset.sg) { const id = +b.dataset.sg; scout.games = b.dataset.sg === 'all' ? [] : scout.games.includes(id) ? scout.games.filter(x => x !== id) : [...scout.games, id]; return loadScout(); }
+};
+$('#scoutBar').onchange = e => {
+  if (e.target.id === 'scTeam') { scout.team = e.target.value; scout.games = []; loadScout(); }
+  if (e.target.id === 'scPlayer') { const p = playerIndex.find(p => p.name === e.target.value); if (p) { scout.player = p.id; scout.games = []; loadScout(); } }
+};
+
+// ---- small render helpers
+const tile = (label, v, sub = '') => `<div class="tile"><span>${label}</span><b>${v ?? '-'}</b><small>${sub}</small></div>`;
+const vsL = (v, l, unit = '%') => v == null || l == null ? '' : `league ${l}${unit}`;
+function bars(obj, total, limit = 6) {
+  const rows = Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, limit), max = rows[0]?.[1] || 1;
+  return rows.map(([k, n]) => `<div class="barrow"><span title="${esc(k)}">${esc(k)}</span><i><b style="width:${100 * n / max}%"></b></i><span>${pct(n, total)}%</span></div>`).join('') || '<p class="muted">-</p>';
+}
+function passMap(grid, title = 'Pass map') {
+  const cells = ['deep', 'short'].map(dp => ['left', 'middle', 'right'].map(dr => grid[`${dp} ${dr}`] || { att: 0, comp: 0, yds: 0 }));
+  const max = Math.max(1, ...cells.flat().map(c => c.att));
+  return `<h3>${title} <span style="text-transform:none;letter-spacing:0">(attempts · completion % · yds/att, offense attacking ↑)</span></h3>
+    <div class="pmap">${cells.map((row, i) => row.map((c, j) => `<div style="background:rgba(245,184,46,${0.06 + 0.34 * c.att / max})">
+      <small>${['Deep', 'Short'][i]} ${['left', 'middle', 'right'][j]}</small><b>${c.att}</b><span>${c.att ? `${pct(c.comp, c.att)}% · ${(c.yds / c.att).toFixed(1)}` : '-'}</span></div>`).join('')).join('')}</div>`;
+}
+function table(head, rows) { return `<table class="ctable"><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>${rows.map(r => `<tr>${r.map(c => `<td>${c ?? '-'}</td>`).join('')}</tr>`).join('')}</table>`; }
+const topList = top => `<h3>Biggest plays (click to watch)</h3>${top.map(t => `<div class="story" data-open="${t.gameId}:${t.playId}"><span class="muted">${t.yds > 0 ? '+' : ''}${t.yds}</span><span>Q${t.q} ${t.clock} · ${esc(t.desc.replace(/^\(\d+:\d+\)\s*/, ''))}</span></div>`).join('') || '<p class="muted">-</p>'}`;
+
+// ---- plain-language playstyle summary: only what stands out vs the league
+// PFF alignment codes → words ("SLoWR" → "slot left (outside)")
+const ALIGN = { WR: 'wide', TE: 'tight end', HB: 'backfield', FB: 'fullback', QB: 'quarterback', LT: 'left tackle', LG: 'left guard', C: 'center', RG: 'right guard', RT: 'right tackle',
+  CB: 'corner', SCB: 'slot corner', FS: 'deep safety', SS: 'strong safety', LB: 'linebacker', ILB: 'inside LB', OLB: 'outside LB', MLB: 'middle LB', EO: 'edge', E: 'end', DT: 'D-tackle', NT: 'nose tackle' };
+function alignLabel(code) {
+  const m = code.match(/^(S?)([LR]?)(o|i)?(WR)$/) || code.match(/^(S)?(CB)([LR]?)(o|i)?$/);
+  const side = s => s === 'L' ? 'left' : s === 'R' ? 'right' : '', io = s => s === 'o' ? ' (outside)' : s === 'i' ? ' (inside)' : '';
+  if (/WR$/.test(code) && m) return `${m[1] ? 'slot' : 'wide'} ${side(m[2])}${io(m[3])}`.trim();
+  if (/^SCB/.test(code)) { const x = code.match(/^SCB(o|i)?([LR])?/); return `slot corner ${side(x[2])}${io(x[1])}`.trim(); }
+  const t = code.match(/^(TE|HB|FB)-?(o|i)?([LR])?$/); if (t) return `${ALIGN[t[1]]} ${side(t[3])}${io(t[2])}`.trim();
+  const dn = code.match(/^([DN])([LR])T$/); if (dn) return `${dn[1] === 'D' ? 'D-tackle' : 'nose'} ${side(dn[2])}`;
+  const d = code.match(/^([LR])?(CB|ILB|OLB|LB|EO|E|DT|FS|SS)([LR])?$/);
+  if (d) return `${ALIGN[d[2]]} ${side(d[1] || d[3])}`.trim();
+  return ALIGN[code] || code;
+}
+const SITUATIONAL = ['Red Zone', 'Goal Line', 'Prevent']; // short-field / end-of-half calls skew yards, keep them out of best/worst
+function playstyle(s, L, side) {
+  const out = [], cmp = (v, l, more, less, unit = '%', rel = 0.15) => { if (v == null || l == null || !l) return; const r = v / l - 1;
+    if (r > rel) out.push(`${more}: <b>${v}${unit}</b> vs ${l}${unit} league`); else if (r < -rel) out.push(`${less}: <b>${v}${unit}</b> vs ${l}${unit} league`); };
+  const top = o => Object.entries(o).sort((a, b) => b[1] - a[1])[0];
+  if (side === 'off') {
+    cmp(s.deepRate, L.deepRate, 'Throws deep a lot', 'Lives on short passes');
+    cmp(s.paRate, L.paRate, 'Leans on play action', 'Rarely uses play action');
+    cmp(s.ypa, L.ypa, 'Explosive through the air', 'Struggles to move the ball', ' yds/att', 0.1);
+    cmp(s.sackRate, L.sackRate, 'Takes a lot of sacks', 'Protects the QB well');
+    cmp(s.thirdConvRate, L.thirdConvRate, 'Converts on 3rd down', 'Stalls on 3rd down', '%', 0.12);
+    if (s.tt != null) out.push(s.tt < 2.6 ? `Quick game: ball out in <b>${s.tt}s</b> on average` : s.tt > 3 ? `Holds the ball: <b>${s.tt}s</b> to throw on average` : `Average time to throw <b>${s.tt}s</b>`);
+    const f = top(s.formation); if (f) out.push(`Favourite formation: <b>${f[0]}</b> (${pct(f[1], s.dropbacks)}%)`);
+    const pz = top(Object.fromEntries(Object.entries(s.grid).map(([k, v]) => [k, v.att]))); if (pz) out.push(`Most targeted area: <b>${pz[0]}</b> (${pct(pz[1], s.att)}% of attempts)`);
+    const cov = Object.entries(s.byCov).filter(([k, c]) => c.att >= 8 && !SITUATIONAL.includes(k)).map(([k, c]) => [k, c.yds / c.att]).sort((a, b) => b[1] - a[1]);
+    if (cov.length > 1) out.push(`Best vs <b>${cov[0][0]}</b> (${cov[0][1].toFixed(1)} yds/att), worst vs <b>${cov.at(-1)[0]}</b> (${cov.at(-1)[1].toFixed(1)})`);
+  } else {
+    cmp(s.manRate, L.manRate, 'Man-heavy', 'Zone-heavy (little man)');
+    cmp(s.blitzRate, L.blitzRate, 'Blitzes a lot', 'Rarely blitzes');
+    cmp(s.pressureRate, L.pressureRate, 'Gets home: high pressure rate', 'Little pressure on the QB');
+    cmp(s.compPct, L.compPct, 'Gives up completions', 'Tight coverage: low completion %', '%', 0.06);
+    cmp(s.ypa, L.ypa, 'Leaky vs the pass', 'Stingy vs the pass', ' yds/att', 0.1);
+    const c = top(s.coverage); if (c) out.push(`Favourite call: <b>${c[0]}</b> (${pct(c[1], s.dropbacks)}%)`);
+    out.push(`Rushes <b>${s.avgRushers}</b> on average, with <b>${s.avgBox}</b> in the box`);
+    const cov = Object.entries(s.byCov).filter(([k, c]) => c.att >= 8 && !SITUATIONAL.includes(k)).map(([k, c]) => [k, c.yds / c.att]).sort((a, b) => b[1] - a[1]);
+    if (cov.length > 1) out.push(`Most vulnerable in <b>${cov[0][0]}</b> (${cov[0][1].toFixed(1)} yds/att allowed), best in <b>${cov.at(-1)[0]}</b> (${cov.at(-1)[1].toFixed(1)})`);
+  }
+  return out.length ? `<ul class="style">${out.map(b => `<li>${b}</li>`).join('')}</ul>` : '<p class="muted">Nothing stands out from the league average.</p>';
+}
+
+function renderScout() {
+  const d = scout.data; renderScoutBar();
+  if (!d) { $('#scoutBody').innerHTML = '<p class="muted">No data for this selection.</p>'; return; }
+  const n = d.selected.length, scope = `${n} game${n > 1 ? 's' : ''}`;
+  if (d.kind === 'team') {
+    const s = d.stats, L = d.league, off = d.side === 'off', lead = d.leaders;
+    const recv = lead.filter(o => o.tgt).sort((a, b) => b.tgt - a.tgt).slice(0, 8);
+    const rush = lead.filter(o => o.rush).sort((a, b) => b.pressures - a.pressures).slice(0, 8);
+    const blk = lead.filter(o => o.block >= 5).sort((a, b) => b.allowed - a.allowed).slice(0, 8);
+    const cov = lead.filter(o => o.nearTgt).sort((a, b) => b.nearTgt - a.nearTgt).slice(0, 8);
+    $('#scoutBody').innerHTML = `<div class="headline">${d.team} ${off ? 'offense' : 'defense'} · ${scope} · ${s.dropbacks} dropbacks</div>
+      <div class="card"><h3 style="margin-top:0">Playstyle</h3>${playstyle(s, L, d.side)}</div>
+      <div class="tiles">${off ? [
+        tile('Completion', s.compPct + '%', vsL(s.compPct, L.compPct)), tile('Yards / attempt', s.ypa, vsL(s.ypa, L.ypa, '')), tile('TD / INT', `${s.td} / ${s.int}`),
+        tile('Sack rate', s.sackRate + '%', vsL(s.sackRate, L.sackRate)), tile('Pressured', s.pressureRate + '%', vsL(s.pressureRate, L.pressureRate)),
+        tile('Time to throw', s.tt ? s.tt + 's' : '-'), tile('Deep throws', s.deepRate + '%', vsL(s.deepRate, L.deepRate)), tile('Play action', s.paRate + '%', vsL(s.paRate, L.paRate)),
+        tile('3rd-down conv.', s.thirdConvRate + '%', vsL(s.thirdConvRate, L.thirdConvRate)), tile('Target open at throw', s.tgtSep ? s.tgtSep + ' yds' : '-', 'nearest defender')].join('')
+      : [tile('Comp. allowed', s.compPct + '%', vsL(s.compPct, L.compPct)), tile('Yds / att allowed', s.ypa, vsL(s.ypa, L.ypa, '')), tile('INT / TD allowed', `${s.int} / ${s.td}`),
+        tile('Sacks', s.sacks, `${s.sackRate}% of dropbacks`), tile('Pressure rate', s.pressureRate + '%', vsL(s.pressureRate, L.pressureRate)),
+        tile('Blitz rate', s.blitzRate + '%', vsL(s.blitzRate, L.blitzRate)), tile('Man / zone', `${s.manRate}% / ${s.zoneRate}%`, `league ${L.manRate}% / ${L.zoneRate}%`),
+        tile('Avg rushers', s.avgRushers, `league ${L.avgRushers}`), tile("QB's time to throw", s.tt ? s.tt + 's' : '-'), tile('Target open at throw', s.tgtSep ? s.tgtSep + ' yds' : '-', 'lower = tighter')].join('')}</div>
+      <div class="cols">
+        <div class="card">${passMap(s.grid, off ? 'Pass map' : 'Where they get thrown on')}</div>
+        <div class="card"><h3 style="margin-top:0">${off ? 'Coverages faced' : 'Coverage calls'}</h3>${bars(s.coverage, s.dropbacks)}
+          ${table(['Coverage', 'Att', 'Comp %', 'Yds/att'], Object.entries(s.byCov).sort((a, b) => b[1].att - a[1].att).slice(0, 6).map(([k, c]) => [k, c.att, pct(c.comp, c.att) + '%', (c.yds / c.att).toFixed(1)]))}</div>
+        <div class="card"><h3 style="margin-top:0">Formations</h3>${bars(s.formation, s.dropbacks)}<h3>${off ? 'Personnel' : 'Offensive personnel faced'}</h3>${bars(s.personnelO, s.dropbacks, 4)}
+          ${off ? '' : `<h3>Defensive personnel</h3>${bars(s.personnelD, s.dropbacks, 4)}`}</div>
+        <div class="card"><h3 style="margin-top:0">By down</h3>${table(['Down', 'Dropbacks', 'Yds / play', 'Moved the chains'], Object.entries(s.byDown).map(([k, b]) => [k + ORD[k], b.n, (b.yds / b.n).toFixed(1), pct(b.conv, b.n) + '%']))}
+          <h3>Dropback type</h3>${bars(Object.fromEntries(Object.entries(s.dropback).map(([k, v]) => [k.toLowerCase().replace(/_/g, ' '), v])), s.dropbacks, 4)}</div>
+        ${off ? `<div class="card"><h3 style="margin-top:0">Receivers</h3>${table(['Player', 'Routes', 'Tgt', 'Rec', 'Yds', 'TD', 'Tgt share', 'Avg open'], recv.map(o => [`<a href="#" data-pl="${o.id}">${esc(o.name)}</a> <span class="muted">${o.pos}</span>`, o.routes, o.tgt, o.rec, o.yds, o.td, pct(o.tgt, s.att) + '%', o.avgSep != null ? o.avgSep + ' yds' : '-']))}</div>
+          <div class="card"><h3 style="margin-top:0">Pass protection</h3>${table(['Player', 'Blocks', 'Pressures allowed', 'Beaten'], blk.map(o => [`<a href="#" data-pl="${o.id}">${esc(o.name)}</a> <span class="muted">${o.pos}</span>`, o.block, o.allowed, o.beaten]))}</div>`
+        : `<div class="card"><h3 style="margin-top:0">Pass rushers</h3>${table(['Player', 'Rushes', 'Pressures', 'Sacks', 'Hits', 'Hurries', 'Rate'], rush.map(o => [`<a href="#" data-pl="${o.id}">${esc(o.name)}</a> <span class="muted">${o.pos}</span>`, o.rush, o.pressures, o.sack, o.hit, o.hurry, pct(o.pressures, o.rush) + '%']))}</div>
+          <div class="card"><h3 style="margin-top:0">In coverage <span style="text-transform:none;letter-spacing:0">(nearest defender to the target at the throw)</span></h3>${table(['Player', 'Targets', 'Comp', 'Yds'], cov.map(o => [`<a href="#" data-pl="${o.id}">${esc(o.name)}</a> <span class="muted">${o.pos}</span>`, o.nearTgt, o.nearComp, o.nearYds]))}</div>`}
+        <div class="card">${topList(d.top)}</div>
+      </div>`;
+  } else {
+    const p = d.player, me = d.me, L = d.league, q = d.qb, sec = [];
+    if (q) sec.push(`<div class="card"><h3 style="margin-top:0">Passing</h3><div class="tiles">${[tile('Completion', q.compPct + '%', vsL(q.compPct, L.compPct)), tile('Yards / att', q.ypa, vsL(q.ypa, L.ypa, '')),
+      tile('TD / INT', `${q.td} / ${q.int}`), tile('Sacks', q.sacks, `${q.sackRate}%`), tile('Time to throw', q.tt ? q.tt + 's' : '-'), tile('Deep throws', q.deepRate + '%', vsL(q.deepRate, L.deepRate)),
+      tile('Pressured', q.pressureRate + '%'), tile('Play action', q.paRate + '%', vsL(q.paRate, L.paRate))].join('')}</div>${passMap(q.grid)}</div>`, `<div class="card"><h3 style="margin-top:0">Playstyle</h3>${playstyle(q, L, 'off')}</div>`);
+    if (me.routes) sec.push(`<div class="card"><h3 style="margin-top:0">Receiving</h3><div class="tiles">${[tile('Routes', me.routes), tile('Targets', me.tgt, `${pct(me.tgt, me.routes)}% of routes`), tile('Catches', me.rec, me.tgt ? `${pct(me.rec, me.tgt)}% catch rate` : ''),
+      tile('Yards', me.yds, me.routes ? `${(me.yds / me.routes).toFixed(2)} per route` : ''), tile('TD', me.td), tile('Avg open at throw', me.avgSep != null ? me.avgSep + ' yds' : '-', 'all his routes')].join('')}</div>${passMap(d.grid, 'Where he gets the ball')}</div>`);
+    if (me.rush) sec.push(`<div class="card"><h3 style="margin-top:0">Pass rush</h3><div class="tiles">${[tile('Rushes', me.rush), tile('Pressures', me.pressures, `${pct(me.pressures, me.rush)}% of rushes`), tile('Sacks', me.sack), tile('Hits', me.hit), tile('Hurries', me.hurry)].join('')}</div></div>`);
+    if (me.block) sec.push(`<div class="card"><h3 style="margin-top:0">Pass protection</h3><div class="tiles">${[tile('Pass blocks', me.block), tile('Pressures allowed', me.allowed, `${pct(me.allowed, me.block)}% of blocks`), tile('Beaten', me.beaten)].join('')}</div></div>`);
+    if (me.cover) sec.push(`<div class="card"><h3 style="margin-top:0">Coverage</h3><div class="tiles">${[tile('Coverage snaps', me.cover), tile('Targets as nearest defender', me.nearTgt), tile('Completions allowed', me.nearComp, me.nearTgt ? `${pct(me.nearComp, me.nearTgt)}%` : ''), tile('Yards allowed', me.nearYds)].join('')}</div></div>`);
+    $('#scoutBody').innerHTML = `<div class="headline">${esc(p.name)} <span class="muted">${p.pos} · ${p.team} · ${scope} · ${d.snaps} pass snaps</span></div>
+      <div class="cols"><div class="card"><h3 style="margin-top:0">Jobs on pass plays</h3>${bars(d.roles, d.snaps)}<h3>Where he lines up</h3>${bars(Object.entries(d.aligned).reduce((o, [k, v]) => (o[`${alignLabel(k)} · ${k}`] = v, o), {}), d.snaps)}</div>${sec.join('')}<div class="card">${topList(d.top)}</div></div>`;
+  }
+}
+$('#scoutBody').onclick = async e => {
+  const a = e.target.closest('[data-pl], [data-open]'); if (!a) return; e.preventDefault();
+  if (a.dataset.pl) { scout.kind = 'player'; scout.player = +a.dataset.pl; scout.games = []; return loadScout(); }
+  const [g, p] = a.dataset.open.split(':').map(Number);
+  closeScout(); $('#game').value = g; filter = 'All'; $$('#chips button').forEach(b => b.classList.toggle('on', b.dataset.f === 'All')); await loadGame(); await loadPlay(p);
+  $(`.play[data-id="${p}"]`)?.scrollIntoView({ block: 'nearest' });
+};
+$('#scoutBtn').onclick = () => document.body.classList.contains('scouting') ? closeScout() : openScout();
+$('#board').onclick = e => { const t = e.target.closest('.team'); if (t) openScout({ kind: 'team', team: t.dataset.team, side: t.dataset.team === cur.play.possessionTeam ? 'off' : 'def', games: [] }); };
 </script>
 </body>
 </html>
