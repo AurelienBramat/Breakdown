@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gridiron Replay</title>
+<style>
+  :root { --bg:#0f1418; --panel:#182027; --line:#2a3640; --text:#e4ebf0; --mute:#8a9aa6; --acc:#f5b82e; --good:#4cc38a; --bad:#e5544b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.4 system-ui, sans-serif; display:grid; grid-template-columns:320px 1fr 300px; height:100vh; }
+  aside, section { overflow:auto; padding:12px; }
+  aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+  #right { background:var(--panel); border-left:1px solid var(--line); }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--mute); margin:14px 0 6px; }
+  select, input, button { background:#0f1418; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+  button { cursor:pointer; } button:hover { border-color:var(--acc); } button.on { background:var(--acc); color:#000; }
+  #plays { flex:1; overflow:auto; }
+  .play { padding:6px 8px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .play:hover, .play.sel { background:#22303a; }
+  .play b { color:var(--acc); } .play small { color:var(--mute); display:block; }
+  #field { width:100%; display:block; border-radius:8px; cursor:crosshair; }
+  #bar { display:flex; gap:6px; align-items:center; margin:10px 0 4px; flex-wrap:wrap; }
+  #scrub { flex:1; min-width:200px; }
+  #ticks { position:relative; height:18px; margin:0 0 6px; }
+  #ticks span { position:absolute; font-size:10px; color:var(--mute); transform:translateX(-50%); white-space:nowrap; border-left:1px solid var(--acc); padding-left:3px; }
+  #desc { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; margin-top:8px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; } .kv span:nth-child(odd) { color:var(--mute); }
+  .barrow { display:flex; align-items:center; gap:6px; margin:3px 0; } .barrow i { display:block; height:8px; background:var(--acc); border-radius:4px; }
+  .barrow span:first-child { width:90px; color:var(--mute); }
+  #whatif { border:1px solid var(--acc); border-radius:8px; padding:10px; margin-top:10px; }
+  .hint { color:var(--mute); font-size:12px; }
+  .good { color:var(--good); } .bad { color:var(--bad); }
+</style>
+</head>
+<body>
+<aside>
+  <select id="game"></select>
+  <input id="filter" placeholder="Filter plays (e.g. Brady, deep, sack, Cover-1)">
+  <div id="plays"></div>
+</aside>
+
+<section>
+  <canvas id="field" width="1200" height="533"></canvas>
+  <div id="bar">
+    <button id="playBtn">▶</button>
+    <button id="back">⏮ frame</button><button id="fwd">frame ⏭</button>
+    <input id="scrub" type="range" min="0" value="0">
+    <select id="speed"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option></select>
+    <label><input id="trails" type="checkbox" checked> trails</label>
+    <span id="fr" class="hint"></span>
+  </div>
+  <div id="ticks"></div>
+  <div id="desc" class="hint">Pick a game and a play.</div>
+
+  <div id="whatif">
+    <b>What-if simulator</b>
+    <p class="hint">1) Click "Edit route", 2) click an offensive player, 3) click on the field to draw the new route (several points). Edit as many players as you like, then run. The defense re-reacts using its coverage and how this team usually plays.</p>
+    <div id="bar">
+      <button id="editBtn">Edit route</button>
+      <button id="undoBtn">Undo point</button>
+      <button id="clearBtn">Clear edits</button>
+      <select id="cov">
+        <option value="played">Defense: as played</option>
+        <option value="tendency">Defense: team tendency</option>
+        <option value="Man">Defense: force man</option>
+        <option value="Zone">Defense: force zone</option>
+      </select>
+      <button id="simBtn">Run simulation</button>
+      <button id="origBtn">Show original</button>
+    </div>
+    <div id="simOut" class="hint"></div>
+  </div>
+</section>
+
+<aside id="right">
+  <h2>Selected player</h2><div id="player" class="hint">Click a player on the field.</div>
+  <h2 id="tendTitle">Defensive tendencies</h2><div id="tend" class="hint">—</div>
+</aside>
+
+<script>
+const $ = s => document.querySelector(s);
+const cv = $('#field'), ctx = cv.getContext('2d');
+const K = 10, W = 53.3; // px per yard, field width
+const COLORS = { ARI:'#97233F',ATL:'#A71930',BAL:'#5b3fb5',BUF:'#00338D',CAR:'#0085CA',CHI:'#C83803',CIN:'#FB4F14',CLE:'#FF3C00',DAL:'#4a7bd0',DEN:'#FB4F14',DET:'#0076B6',GB:'#2f7d4f',HOU:'#A71930',IND:'#2a6fd6',JAX:'#006778',KC:'#E31837',LA:'#003594',LAC:'#0080C6',LV:'#A5ACAF',MIA:'#008E97',MIN:'#6b3fb0',NE:'#3a5a9a',NO:'#D3BC8D',NYG:'#0B2265',NYJ:'#125740',PHI:'#004C54',PIT:'#FFB612',SEA:'#69BE28',SF:'#AA0000',TB:'#D50A0A',TEN:'#4B92DB',WAS:'#a03a3a' };
+const SNAP = ['ball_snap','autoevent_ballsnap'], END = ['pass_forward','autoevent_passforward','qb_sack','qb_strip_sack','run','fumble'];
+
+let cur = null, plays = [], frame = 0, playing = false, last = 0, sel = null;
+let edits = {}, editMode = false, activeEdit = null, sim = null;
+
+const api = (p) => fetch(p).then(r => r.json());
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+const px = (x, y) => [x * K, (W - y) * K];
+const toYd = (cx, cy) => [cx / K, W - cy / K];
+
+// ---------- loading ----------
+api('/api/games').then(gs => {
+  $('#game').innerHTML = gs.map(g => `<option value="${g.gameId}">Wk ${g.week} · ${g.visitorTeamAbbr} @ ${g.homeTeamAbbr} · ${g.gameDate}</option>`).join('');
+  loadGame();
+});
+$('#game').onchange = loadGame;
+$('#filter').oninput = renderPlayList;
+
+async function loadGame() {
+  plays = await api('/api/plays?game=' + $('#game').value);
+  plays.sort((a, b) => a.playId - b.playId);
+  renderPlayList();
+}
+function renderPlayList() {
+  const q = $('#filter').value.toLowerCase();
+  $('#plays').innerHTML = plays.filter(p => !q || JSON.stringify(p).toLowerCase().includes(q)).map(p =>
+    `<div class="play" data-id="${p.playId}"><b>Q${p.quarter} ${p.gameClock}</b> · ${p.down}&${p.yardsToGo} · ${p.possessionTeam} ${p.playResult >= 0 ? '+' : ''}${p.playResult}
+     <small>${p.playDescription}</small></div>`).join('');
+  document.querySelectorAll('.play').forEach(d => d.onclick = () => loadPlay(+d.dataset.id, d));
+}
+async function loadPlay(id, el) {
+  document.querySelectorAll('.play.sel').forEach(d => d.classList.remove('sel')); el?.classList.add('sel');
+  cur = await api(`/api/play?game=${$('#game').value}&play=${id}`);
+  if (!cur) return;
+  const ev = Object.entries(cur.events);
+  cur.S = +(ev.find(([, e]) => SNAP.includes(e))?.[0] ?? 0);
+  cur.E = +(ev.find(([f, e]) => +f > cur.S && END.includes(e))?.[0] ?? cur.nFrames - 1);
+  cur.sgn = cur.dir === 'right' ? 1 : -1;
+  for (const e of cur.ents) for (let f = 0; f < cur.nFrames; f++) e.f[f] ||= e.f[f - 1] || e.f.find(Boolean);
+  edits = {}; sim = null; sel = null; frame = 0; playing = false; editMode = false;
+  $('#editBtn').classList.remove('on'); $('#simOut').textContent = '';
+  const p = cur.play;
+  $('#desc').innerHTML = `<b>${p.possessionTeam} vs ${p.defensiveTeam}</b> · Q${p.quarter} ${p.gameClock} · ${p.down}&${p.yardsToGo} at ${p.yardlineSide} ${p.yardlineNumber}<br>${p.playDescription}
+    <div class="kv" style="margin-top:6px"><span>Formation</span><span>${p.offenseFormation} · ${p.personnelO}</span>
+    <span>Defense</span><span>${p.personnelD} · ${p.defendersInBox} in box</span>
+    <span>Coverage</span><span>${p.pff_passCoverage} (${p.pff_passCoverageType})</span>
+    <span>Dropback</span><span>${p.dropBackType}${p.pff_playAction ? ' · play action' : ''}</span>
+    <span>Result</span><span>${p.passResult || '-'} · ${p.playResult} yds</span></div>`;
+  $('#ticks').innerHTML = ev.map(([f, e]) => `<span style="left:${f / (cur.nFrames - 1) * 100}%">${e.replace('autoevent_', '').replace(/_/g, ' ')}</span>`).join('');
+  loadTendencies(p);
+  setRange(); draw();
+}
+
+// ---------- team tendencies ("how they usually play") ----------
+async function loadTendencies(p) {
+  const t = await api('/api/team?t=' + p.defensiveTeam);
+  cur.tend = t;
+  const b = t.all, d = t.byDown[p.down] || b;
+  const pct = (a, n) => Math.round(100 * a / Math.max(n, 1));
+  const covs = Object.entries(b.cov).sort((a, c) => c[1] - a[1]).slice(0, 6);
+  $('#tendTitle').textContent = `${p.defensiveTeam} defense (weeks 1-8)`;
+  $('#tend').innerHTML = `<div class="kv"><span>Pass plays</span><span>${b.n}</span>
+    <span>Man / Zone</span><span>${pct(b.man, b.n)}% / ${pct(b.zone, b.n)}%</span>
+    <span>On ${p.down}${['', 'st', 'nd', 'rd', 'th'][p.down]} down</span><span>${pct(d.man, d.n)}% man (${d.n} plays)</span>
+    <span>Avg rushers</span><span>${(b.rush / b.n).toFixed(1)}</span>
+    <span>Blitz (5+)</span><span>${pct(b.blitz, b.n)}%</span>
+    <span>Avg in box</span><span>${(b.box / b.n).toFixed(1)}</span></div>
+    <h2>Coverage calls</h2>` + covs.map(([c, n]) =>
+    `<div class="barrow"><span>${c}</span><i style="width:${pct(n, b.n) * 1.5}px"></i>${pct(n, b.n)}%</div>`).join('');
+}
+function tendencyCoverage() {
+  const d = cur.tend.byDown[cur.play.down] || cur.tend.all;
+  return d.man / Math.max(d.man + d.zone, 1) >= 0.5 ? 'Man' : 'Zone';
+}
+
+// ---------- drawing ----------
+function pos(e, f) { return sim?.pos[e.id]?.[f] || e.f[f]; }
+function drawField() {
+  ctx.fillStyle = '#2f6b3a'; ctx.fillRect(0, 0, cv.width, cv.height);
+  for (let i = 0; i < 10; i++) if (i % 2) { ctx.fillStyle = '#336f3e'; ctx.fillRect((10 + i * 10) * K, 0, 10 * K, cv.height); }
+  ctx.fillStyle = '#25522e'; ctx.fillRect(0, 0, 10 * K, cv.height); ctx.fillRect(110 * K, 0, 10 * K, cv.height);
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1;
+  for (let x = 10; x <= 110; x += 5) { ctx.beginPath(); ctx.moveTo(x * K, 0); ctx.lineTo(x * K, cv.height); ctx.stroke(); }
+  ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.font = 'bold 22px system-ui'; ctx.textAlign = 'center';
+  for (let i = 1; i < 10; i++) { const n = Math.min(i, 10 - i) * 10; ctx.fillText(n, (10 + i * 10) * K, 12 * K); ctx.fillText(n, (10 + i * 10) * K, (W - 10) * K); }
+  for (let x = 11; x < 110; x++) for (const y of [23.6, 29.7]) { ctx.fillRect(x * K - 0.5, (W - y) * K - 4, 1, 8); }
+  if (!cur) return;
+  const los = cur.play.absoluteYardlineNumber;
+  ctx.lineWidth = 3; ctx.strokeStyle = '#3d8bff'; ctx.beginPath(); ctx.moveTo(los * K, 0); ctx.lineTo(los * K, cv.height); ctx.stroke();
+  const fd = los + cur.sgn * cur.play.yardsToGo;
+  ctx.strokeStyle = '#ffd400'; ctx.beginPath(); ctx.moveTo(fd * K, 0); ctx.lineTo(fd * K, cv.height); ctx.stroke();
+}
+function draw() {
+  drawField();
+  if (!cur) return;
+  $('#fr').textContent = `frame ${frame + 1}/${maxFrame() + 1} · ${(frame / 10).toFixed(1)}s` + (sim ? ' · SIMULATED' : '');
+  $('#scrub').value = frame;
+  // ghosts of the original positions for anything the simulation moved
+  if (sim) for (const e of cur.ents) if (sim.pos[e.id]) {
+    const [x, y] = px(...e.f[frame]); ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+  }
+  // drawn routes
+  for (const [id, pts] of Object.entries(edits)) {
+    const e = cur.ents.find(e => e.id === id), start = e.f[cur.S];
+    ctx.strokeStyle = id === activeEdit && editMode ? '#f5b82e' : 'rgba(245,184,46,.6)'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+    ctx.beginPath(); ctx.moveTo(...px(start[0], start[1])); pts.forEach(p => ctx.lineTo(...px(...p))); ctx.stroke(); ctx.setLineDash([]);
+  }
+  for (const e of cur.ents) {
+    if ($('#trails').checked && e.id !== 'ball') {
+      ctx.strokeStyle = e.id === sel ? '#fff' : 'rgba(255,255,255,.25)'; ctx.lineWidth = e.id === sel ? 2 : 1; ctx.beginPath();
+      for (let f = Math.max(0, frame - 30); f <= frame; f++) ctx.lineTo(...px(...pos(e, f)));
+      ctx.stroke();
+    }
+    const [x, y] = px(...pos(e, frame));
+    if (e.id === 'ball') { ctx.fillStyle = '#8b4a1c'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.ellipse(x, y, 6, 4, 0, 0, 7); ctx.fill(); ctx.stroke(); continue; }
+    const o = pos(e, frame)[3] * Math.PI / 180; // NGS orientation: 0 = +y, clockwise
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.sin(o) * 14, y - Math.cos(o) * 14); ctx.stroke();
+    ctx.fillStyle = COLORS[e.team] || '#888'; ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fill();
+    ctx.lineWidth = e.id === sel ? 3 : 1.5; ctx.strokeStyle = e.id === sel ? '#f5b82e' : e.team === cur.play.possessionTeam ? '#fff' : '#111'; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(e.jersey ?? '', x, y + 0.5);
+  }
+  showPlayer();
+}
+function showPlayer() {
+  const e = cur?.ents.find(e => e.id === sel);
+  if (!e) return;
+  const p = pos(e, frame), max = Math.max(...e.f.map(f => f[2]));
+  const blocked = cur.ents.find(x => x.id == e.blocked);
+  const yn = v => v == null ? '-' : v ? 'yes' : 'no';
+  $('#player').innerHTML = `<b style="font-size:15px">#${e.jersey} ${e.name}</b><div class="kv" style="margin-top:6px">
+    <span>Team</span><span>${e.team}</span><span>Position</span><span>${e.pos}</span>
+    <span>PFF role</span><span>${e.role || '-'} (${e.lined || '-'})</span>
+    <span>Speed now</span><span>${p[2].toFixed(1)} yd/s</span><span>Max speed</span><span>${max.toFixed(1)} yd/s</span>
+    <span>Separation</span><span>${separation(e, frame)?.toFixed(1) ?? '-'} yds</span>
+    ${e.role === 'Pass Rush' ? `<span>Hit / Hurry / Sack</span><span>${yn(e.hit)} / ${yn(e.hurry)} / ${yn(e.sack)}</span>` : ''}
+    ${e.role === 'Pass Block' ? `<span>Blocking</span><span>${blocked?.name || '-'}</span><span>Beaten</span><span>${yn(e.beaten)}</span>` : ''}</div>`;
+}
+// distance to closest opponent
+function separation(e, f) {
+  const me = pos(e, f);
+  const opp = cur.ents.filter(o => o.id !== 'ball' && o.team !== e.team);
+  return opp.length ? Math.min(...opp.map(o => dist(me, pos(o, f)))) : null;
+}
+
+// ---------- playback ----------
+const maxFrame = () => sim ? cur.E : cur.nFrames - 1;
+function setRange() { $('#scrub').max = maxFrame(); }
+$('#scrub').oninput = e => { frame = +e.target.value; draw(); };
+$('#playBtn').onclick = () => { if (!cur) return; if (frame >= maxFrame()) frame = 0; playing = !playing; $('#playBtn').textContent = playing ? '⏸' : '▶'; };
+$('#back').onclick = () => { frame = Math.max(0, frame - 1); draw(); };
+$('#fwd').onclick = () => { if (cur) { frame = Math.min(maxFrame(), frame + 1); draw(); } };
+$('#trails').onchange = draw;
+function tick(t) {
+  if (playing && cur && t - last > 100 / +$('#speed').value) {
+    last = t; frame++;
+    if (frame >= maxFrame()) { frame = maxFrame(); playing = false; $('#playBtn').textContent = '▶'; }
+    draw();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---------- clicking: select players / draw routes ----------
+cv.onclick = ev => {
+  if (!cur) return;
+  const r = cv.getBoundingClientRect();
+  const yd = toYd((ev.clientX - r.left) * cv.width / r.width, (ev.clientY - r.top) * cv.height / r.height);
+  const hit = cur.ents.filter(e => e.id !== 'ball').find(e => dist(pos(e, frame), yd) < 1.3);
+  if (editMode) {
+    if (hit && hit.team === cur.play.possessionTeam && hit.role !== 'Pass') { activeEdit = sel = hit.id; edits[hit.id] ||= []; }
+    else if (activeEdit) edits[activeEdit].push(yd);
+  } else sel = hit?.id ?? null;
+  draw();
+};
+$('#editBtn').onclick = () => {
+  if (!cur) return;
+  editMode = !editMode; $('#editBtn').classList.toggle('on', editMode);
+  if (editMode) { sim = null; setRange(); frame = cur.S; playing = false; }
+  draw();
+};
+$('#undoBtn').onclick = () => { edits[activeEdit]?.pop(); draw(); };
+$('#clearBtn').onclick = () => { edits = {}; sim = null; activeEdit = null; setRange(); $('#simOut').textContent = ''; draw(); };
+$('#origBtn').onclick = () => { sim = null; setRange(); draw(); };
+$('#simBtn').onclick = () => {
+  if (!cur) return;
+  editMode = false; $('#editBtn').classList.remove('on');
+  sim = simulate($('#cov').value); setRange(); frame = cur.S; playing = true; $('#playBtn').textContent = '⏸';
+  report(); draw();
+};
+
+// ---------- the what-if engine ----------
+// Offense: edited players run the drawn route with a realistic speed profile. Everyone else keeps real tracking.
+// Defense: each cover defender is tied to the receiver he shadowed most in the real play.
+//  - same coverage as played: real track + reaction to the edited receiver's change (man: full, zone: only inside his area)
+//  - forced man: trail the assigned receiver, closing the snap cushion
+//  - forced zone: drop to a landmark and break on whichever receiver enters the area
+// Movement is capped by each defender's real top speed, 7 yd/s² accel and a 0.3s reaction delay.
+const LAG = 3, DT = 0.1, AMAX = 7;
+function simulate(choice) {
+  const { S, E } = cur, played = cur.play.pff_passCoverageType;
+  const mode = choice === 'played' ? played : choice === 'tendency' ? tendencyCoverage() : choice;
+  const off = cur.ents.filter(e => e.team === cur.play.possessionTeam);
+  const cover = cur.ents.filter(e => e.team === cur.play.defensiveTeam && e.role === 'Coverage');
+  const routes = off.filter(e => e.role === 'Pass Route' || edits[e.id]);
+  const out = { pos: {}, mode, played };
+
+  // 1. offense routes
+  for (const e of off) {
+    const pts = edits[e.id]; if (!pts?.length) continue;
+    const track = e.f.slice(0, S + 1), top = Math.max(7, ...e.f.map(f => f[2]));
+    let p = e.f[S].slice(0, 2), v = e.f[S][2], i = 0, heading = 0;
+    for (let f = S + 1; f <= E; f++) {
+      v = Math.min(top, v + 5 * DT);
+      let step = v * DT;
+      while (step > 0 && i < pts.length) {
+        const d = dist(p, pts[i]);
+        if (d > step) { p = [p[0] + (pts[i][0] - p[0]) * step / d, p[1] + (pts[i][1] - p[1]) * step / d]; step = 0; }
+        else { // reach waypoint, slow down for the cut
+          step -= d; p = pts[i].slice(); i++;
+          if (i < pts.length) { const prev = Math.atan2(p[0] - (pts[i - 2] || e.f[S])[0], p[1] - (pts[i - 2] || e.f[S])[1]);
+            const next = Math.atan2(pts[i][0] - p[0], pts[i][1] - p[1]); let turn = Math.abs(next - prev); if (turn > Math.PI) turn = 2 * Math.PI - turn;
+            v *= 1 - 0.55 * turn / Math.PI; }
+        }
+      }
+      if (i >= pts.length) v = Math.max(0, v - 8 * DT); // settle at route end
+      const q = track[f - 1]; heading = Math.atan2(p[0] - q[0], p[1] - q[1]) * 180 / Math.PI;
+      track[f] = [p[0], p[1], v, (heading + 360) % 360, heading];
+    }
+    out.pos[e.id] = track;
+  }
+  const R = (e, f) => (out.pos[e.id] || e.f)[Math.max(S, f)];
+
+  // 2. who was each cover defender responsible for? (receiver he stayed closest to on average)
+  const assign = {};
+  for (const d of cover) {
+    let best = null, bestD = Infinity;
+    for (const r of routes) { let s = 0; for (let f = S; f <= E; f++) s += dist(d.f[f], r.f[f]); if (s < bestD) { bestD = s; best = r; } }
+    assign[d.id] = best;
+  }
+
+  // 3. defenders react
+  for (const d of cover) {
+    const a = assign[d.id]; if (!a) continue;
+    const sameMode = mode === played || (played !== 'Man' && played !== 'Zone');
+    if (sameMode && !Object.keys(edits).some(id => mode === 'Man' ? id === a.id : true)) continue; // nothing changed for him
+    const top = Math.max(6, ...d.f.map(f => f[2])) * 1.03;
+    const snapOff = [d.f[S][0] - a.f[S][0], d.f[S][1] - a.f[S][1]], snapDepth = Math.abs(d.f[S][0] - cur.play.absoluteYardlineNumber);
+    const land = [cur.play.absoluteYardlineNumber + cur.sgn * (snapDepth > 9 ? Math.max(snapDepth, 14) : 8), d.f[S][1]];
+    const track = d.f.slice(0, S + 1);
+    let p = d.f[S].slice(0, 2), vel = [(d.f[S][0] - d.f[S - 1 < 0 ? 0 : S - 1][0]) / DT, (d.f[S][1] - d.f[S - 1 < 0 ? 0 : S - 1][1]) / DT];
+    for (let f = S + 1; f <= E; f++) {
+      const t = f - S, lf = f - LAG;
+      let tgt;
+      if (sameMode && mode === 'Man') { // real track shifted by how much his man moved off the original route
+        const n = R(a, lf), o = a.f[Math.max(S, lf)]; tgt = [d.f[f][0] + n[0] - o[0], d.f[f][1] + n[1] - o[1]];
+      } else if (sameMode) { // zone: react to any edited receiver near his real zone position
+        tgt = d.f[f].slice(0, 2);
+        for (const id of Object.keys(edits)) {
+          const r = cur.ents.find(e => e.id === id), n = R(r, lf), o = r.f[Math.max(S, lf)];
+          const w = Math.max(0, Math.min(1, 1 - (dist(n, d.f[f]) - 3) / 7));
+          tgt = [tgt[0] + w * (n[0] - o[0]), tgt[1] + w * (n[1] - o[1])];
+        }
+      } else if (mode === 'Man') { // forced man: trail assigned receiver, cushion shrinks over 2s
+        const n = R(a, lf), k = Math.max(0.15, 1 - t / 20); tgt = [n[0] + snapOff[0] * k, n[1] + snapOff[1] * k];
+      } else { // forced zone: drop to landmark, break on closest receiver in area
+        const k = Math.min(1, t / 15), anchor = [d.f[S][0] + (land[0] - d.f[S][0]) * k, d.f[S][1] + (land[1] - d.f[S][1]) * k];
+        let near = null, nd = 7; for (const r of routes) { const q = R(r, lf), dd = dist(q, anchor); if (dd < nd) { nd = dd; near = q; } }
+        tgt = near ? [anchor[0] + (near[0] - anchor[0]) * 0.8, anchor[1] + (near[1] - anchor[1]) * 0.8] : anchor;
+      }
+      // kinematics: arrive at target, limited accel + top speed
+      const dx = tgt[0] - p[0], dy = tgt[1] - p[1], dd = Math.hypot(dx, dy) || 1e-6;
+      const want = Math.min(top, dd / 0.3), dv = [dx / dd * want - vel[0], dy / dd * want - vel[1]], dm = Math.hypot(...dv);
+      if (dm > AMAX * DT) { dv[0] *= AMAX * DT / dm; dv[1] *= AMAX * DT / dm; }
+      vel = [vel[0] + dv[0], vel[1] + dv[1]];
+      p = [p[0] + vel[0] * DT, p[1] + vel[1] * DT];
+      const s = Math.hypot(...vel), h = (Math.atan2(vel[0], vel[1]) * 180 / Math.PI + 360) % 360;
+      track[f] = [p[0], p[1], s, h, h];
+    }
+    out.pos[d.id] = track;
+  }
+  return out;
+}
+function report() {
+  const { E } = cur, ids = Object.keys(edits).filter(id => edits[id].length);
+  $('#simOut').innerHTML = ids.length ? '' : 'No routes drawn — replaying with the chosen coverage only.';
+  const lines = cur.ents.filter(e => e.role === 'Pass Route' || ids.includes(e.id)).map(e => {
+    const real = (() => { const s = sim; sim = null; const v = separation(e, E); sim = s; return v; })();
+    const now = separation(e, E), diff = now - real;
+    return `<div>#${e.jersey} ${e.name}: <b class="${now > 3 ? 'good' : now < 1.5 ? 'bad' : ''}">${now.toFixed(1)} yds</b> open at the throw (real: ${real.toFixed(1)}, <span class="${diff > 0 ? 'good' : 'bad'}">${diff >= 0 ? '+' : ''}${diff.toFixed(1)}</span>)${ids.includes(e.id) ? ' ✎' : ''}</div>`;
+  });
+  const why = $('#cov').value === 'tendency' ? ` (${cur.play.defensiveTeam} plays mostly ${sim.mode.toLowerCase()} on ${cur.play.down}${['', 'st', 'nd', 'rd', 'th'][cur.play.down]} down)` : '';
+  $('#simOut').innerHTML += `<p>Defense played <b>${sim.mode}</b>${why}; real call was ${cur.play.pff_passCoverage} (${sim.played}). Separation at frame ${E + 1} (${cur.events[E] || 'end'}):</p>` + lines.join('');
+}
+</script>
+</body>
+</html>
