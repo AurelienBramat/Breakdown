@@ -6,7 +6,7 @@ const NAME = "[A-Z][a-z]{0,2}\\.\\s?[A-Z][\\w'-]+(?:\\.\\s?[A-Z][a-z][\\w'-]*)?"
 const inc = (o, k, by = 1) => { if (k != null && k !== '') o[k] = (o[k] || 0) + by; };
 const r1 = v => Math.round(v * 10) / 10, pct = (a, n) => n ? Math.round(1000 * a / n) / 10 : null;
 
-function createReports({ games, plays, players, pff, tracking }) {
+function createReports({ games, plays, players, pff, summaryFor }) {
   // short name in a description ("C.Godwin") -> nflId among the players on that snap
   function resolve(short, ids) {
     if (!short) return null;
@@ -34,29 +34,15 @@ function createReports({ games, plays, players, pff, tracking }) {
     };
   }
 
-  // ---- tracking summary per game (time to throw, separation of every route runner at the throw)
-  const tsCache = new Map();
-  function trackSummary(gameId) {
-    if (tsCache.has(gameId)) return tsCache.get(gameId);
-    const out = {}, tr = tracking(gameId);
-    for (const p of plays.filter(p => p.gameId === gameId)) {
-      const t = tr[p.playId]; if (!t) continue;
-      const ev = Object.entries(t.events).map(([f, e]) => [+f, e]);
-      const S = ev.find(([, e]) => /ball_?snap/.test(e))?.[0];
-      const E = ev.find(([f, e]) => f > (S ?? -1) && /pass_?forward|qb_sack|qb_strip_sack|^run$/.test(e))?.[0];
-      if (S == null || E == null) continue;
-      const rows = pff[key(p)] || [], at = id => t.ents[id]?.f[E];
-      const defs = rows.filter(r => ['Coverage', 'Pass Rush'].includes(r.pff_role)).map(r => r.nflId).filter(at);
-      const sep = {}, near = {};
-      for (const r of rows.filter(r => r.pff_role === 'Pass Route')) {
-        const me = at(r.nflId); if (!me || !defs.length) continue;
-        let best = Infinity, who = null;
-        for (const d of defs) { const q = at(d), dd = Math.hypot(q[0] - me[0], q[1] - me[1]); if (dd < best) { best = dd; who = d; } }
-        sep[r.nflId] = best; near[r.nflId] = who;
-      }
-      out[p.playId] = { tt: (E - S) / 10, sep, near };
+  // ---- tracking summary per game (time to throw, separation at the throw): precomputed by summaries.js workers
+  const trackSummary = gameId => summaryFor(gameId) || {};
+  // the PFF roles the workers need to summarize one game
+  function rolesFor(gameId) {
+    const out = {};
+    for (const p of plays) if (p.gameId === gameId) {
+      const rows = pff[key(p)] || [];
+      out[p.playId] = { routes: rows.filter(r => r.pff_role === 'Pass Route').map(r => r.nflId), defs: rows.filter(r => ['Coverage', 'Pass Rush'].includes(r.pff_role)).map(r => r.nflId) };
     }
-    tsCache.set(gameId, out);
     return out;
   }
 
@@ -126,14 +112,17 @@ function createReports({ games, plays, players, pff, tracking }) {
   const playerList = Object.keys(playerTeam).map(id => ({ id: +id, name: players[id]?.displayName, pos: players[id]?.officialPosition, team: playerTeam[id] }))
     .filter(p => p.name).sort((a, b) => a.name.localeCompare(b.name));
 
+  // which games a report covers (the server makes sure their tracking summaries are ready first)
+  const gameIdsFor = ({ team, player }, gameIds) => gameIds?.length ? gameIds
+    : team ? teamGames(team).map(g => g.gameId) : games.filter(g => playerGames[player]?.has(g.gameId)).map(g => g.gameId);
   function teamReport(team, side, gameIds) {
-    const avail = teamGames(team), ids = gameIds?.length ? gameIds : avail.map(g => g.gameId);
+    const avail = teamGames(team), ids = gameIdsFor({ team }, gameIds);
     const list = plays.filter(p => ids.includes(p.gameId) && (side === 'def' ? p.defensiveTeam : p.possessionTeam) === team);
     const lead = leaders(list, true).filter(o => side === 'def' ? (o.rush || o.cover) && playerTeam[o.id] === team : (o.routes || o.block || o.tgt) && playerTeam[o.id] === team);
     return { kind: 'team', team, side, games: avail, selected: ids, stats: passStats(list, true), league, leaders: lead, top: topPlays(list) };
   }
   function playerReport(id, gameIds) {
-    const avail = games.filter(g => playerGames[id]?.has(g.gameId)), ids = gameIds?.length ? gameIds : avail.map(g => g.gameId);
+    const avail = games.filter(g => playerGames[id]?.has(g.gameId)), ids = gameIdsFor({ player: id }, gameIds);
     const mine = plays.filter(p => ids.includes(p.gameId) && (pff[key(p)] || []).some(r => r.nflId === id));
     const roles = {}, aligned = {};
     for (const p of mine) for (const r of pff[key(p)]) if (r.nflId === id) { inc(roles, r.pff_role); inc(aligned, r.pff_positionLinedUp); }
@@ -146,7 +135,7 @@ function createReports({ games, plays, players, pff, tracking }) {
       qb: asQB.length ? passStats(asQB, true) : null, league,
       top: topPlays(mine.filter(p => info[key(p)].target === id || asQB.includes(p) || (pff[key(p)] || []).some(r => r.nflId === id && (r.pff_sack || r.pff_hit)))) };
   }
-  return { teamReport, playerReport, playerList, info };
+  return { teamReport, playerReport, playerList, info, rolesFor, gameIdsFor };
 }
 module.exports = { createReports };
 
@@ -162,7 +151,7 @@ if (require.main === module) {
   const pff = {};
   for (const p of plays) pff[`1-${p.playId}`] = [{ nflId: 10, pff_role: 'Pass' }, { nflId: 11, pff_role: 'Pass Route' },
     { nflId: 20, pff_role: 'Pass Rush', pff_sack: p.playId === 3 ? 1 : 0, pff_hurry: p.playId === 2 ? 1 : 0 }, { nflId: 21, pff_role: 'Coverage' }];
-  const R = createReports({ games, plays, players, pff, tracking: () => ({}) });
+  const R = createReports({ games, plays, players, pff, summaryFor: () => ({}) });
   const off = R.teamReport('AAA', 'off');
   assert.strictEqual(off.stats.att, 2); assert.strictEqual(off.stats.comp, 1); assert.strictEqual(off.stats.compPct, 50);
   assert.strictEqual(off.stats.yds, 25); assert.strictEqual(off.stats.sacks, 1); assert.strictEqual(off.stats.deepRate, 50);
@@ -171,5 +160,7 @@ if (require.main === module) {
   const def = R.teamReport('BBB', 'def'); const de = def.leaders.find(o => o.id === 20); assert.deepStrictEqual([de.sack, de.hurry, de.pressures], [1, 1, 2]);
   assert.strictEqual(R.playerReport(11).grid['deep left'].yds, 25);
   assert.strictEqual(R.info['1-1'].target, 11);
+  assert.deepStrictEqual(R.rolesFor(1)[1], { routes: [11], defs: [20, 21] });
+  assert.deepStrictEqual(R.gameIdsFor({ team: 'BBB' }), [1]);
   console.log('report self-check passed');
 }

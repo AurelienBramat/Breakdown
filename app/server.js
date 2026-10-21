@@ -2,6 +2,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { parseTracking } = require('./tracking-summary');
+const { createSummaries } = require('./summaries');
 
 const DATA = process.env.DATA_DIR || path.join(__dirname, '..', 'nfl-big-data-bowl-regional-event-data-main', 'data');
 const PORT = process.env.PORT || 3000;
@@ -56,22 +58,10 @@ for (const p of plays) {
 
 // Tracking: one CSV per game, parsed on demand. ponytail: FIFO cache of 6 games (~400MB worst case), make it LRU if memory matters.
 const trackCache = new Map();
+const trackFile = gameId => path.join(DATA, 'tracking', `tracking_${gameId}.csv`);
 function tracking(gameId) {
   if (trackCache.has(gameId)) return trackCache.get(gameId);
-  const lines = fs.readFileSync(path.join(DATA, 'tracking', `tracking_${gameId}.csv`), 'utf8').split('\n');
-  const byPlay = {};
-  for (let i = 1; i < lines.length; i++) {
-    const c = lines[i].split(',');
-    if (c.length < 16) continue;
-    const playId = +c[1], frame = +c[3] - 1;
-    const pl = (byPlay[playId] ||= { ents: {}, events: {}, nFrames: 0 });
-    const id = c[2] === 'NA' ? 'ball' : c[2];
-    const e = (pl.ents[id] ||= { id, jersey: c[5] === 'NA' ? null : +c[5], team: c[6], f: [] });
-    e.f[frame] = [+c[8], +c[9], +c[10], +c[14] || 0, +c[15] || 0]; // x y speed orientation direction
-    if (id === 'ball' && c[15].trim() !== 'None') pl.events[frame] = c[15].trim();
-    pl.nFrames = Math.max(pl.nFrames, frame + 1);
-    pl.dir = c[7];
-  }
+  const byPlay = parseTracking(fs.readFileSync(trackFile(gameId), 'utf8'));
   if (trackCache.size >= 6) trackCache.delete(trackCache.keys().next().value);
   trackCache.set(gameId, byPlay);
   return byPlay;
@@ -89,7 +79,11 @@ function playPayload(gameId, playId) {
   return { play: plays.find(p => p.gameId === gameId && p.playId === playId), dir: tr.dir, nFrames: tr.nFrames, events: tr.events, ents };
 }
 
-const reports = require('./report').createReports({ games, plays, players, pff, tracking });
+// scouting: tracking summaries are computed by a worker pool in the background (and cached on disk), never on this thread
+let summaries;
+const reports = require('./report').createReports({ games, plays, players, pff, summaryFor: id => summaries.get(id) });
+summaries = createSummaries({ gameIds: games.map(g => g.gameId), rolesFor: reports.rolesFor, fileFor: trackFile, cacheFile: path.join(__dirname, '.cache', 'track-summaries.json'),
+  threads: process.env.SCOUT_THREADS ? Math.max(1, +process.env.SCOUT_THREADS) : undefined });
 
 const json = (res, o) => { res.writeHead(o ? 200 : 404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
 
@@ -102,13 +96,17 @@ http.createServer((req, res) => {
     if (u.pathname === '/api/play') return json(res, playPayload(g, p));
     if (u.pathname === '/api/team') return json(res, teams[u.searchParams.get('t')]);
     if (u.pathname === '/api/players') return json(res, reports.playerList);
-    if (u.pathname === '/api/report') {
+    if (u.pathname === '/api/report' || u.pathname === '/api/progress') {
       const ids = (u.searchParams.get('games') || '').split(',').filter(Boolean).map(Number);
       const t = u.searchParams.get('team'), id = +u.searchParams.get('player');
       if (t && !teams[t]) return json(res, null);
-      return json(res, t ? reports.teamReport(t, u.searchParams.get('side') === 'def' ? 'def' : 'off', ids) : id ? reports.playerReport(id, ids) : null);
+      const need = t || id ? reports.gameIdsFor({ team: t, player: id }, ids) : undefined;
+      if (u.pathname === '/api/progress') return json(res, summaries.progress(need));
+      if (!need) return json(res, null);
+      return summaries.ensure(need).then(() => json(res, t ? reports.teamReport(t, u.searchParams.get('side') === 'def' ? 'def' : 'off', ids) : reports.playerReport(id, ids)))
+        .catch(e => { console.error(e); res.writeHead(500); res.end(String(e.message)); });
     }
     if (u.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html' }); return fs.createReadStream(path.join(__dirname, 'index.html')).pipe(res); }
     json(res, null);
   } catch (e) { console.error(e); res.writeHead(500); res.end(String(e.message)); }
-}).listen(PORT, () => console.log(`http://localhost:${PORT}`));
+}).listen(PORT, () => { console.log(`http://localhost:${PORT}`); summaries.warmAll(); });

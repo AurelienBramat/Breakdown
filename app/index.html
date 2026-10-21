@@ -97,6 +97,9 @@
   .pmap { display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; }
   .pmap div { border-radius:7px; padding:8px; display:flex; flex-direction:column; align-items:center; border:1px solid var(--line); }
   .pmap small { color:var(--mute); font-size:11px; } .pmap b { font-size:20px; } .pmap span { font-size:11.5px; }
+  .bar { height:8px; background:#26333d; border-radius:4px; overflow:hidden; margin-top:6px; } .bar b { display:block; height:100%; width:0; background:var(--acc); transition:width .2s; }
+  .bar.mini { display:inline-block; width:90px; height:6px; margin:0 4px 0 0; vertical-align:middle; }
+  #warm { font-size:12px; } .prog { background:var(--panel2); border:1px solid var(--line); border-radius:9px; padding:12px; margin-top:12px; }
   ul.style { margin:0; padding-left:18px; line-height:1.8; } ul.style b { color:var(--acc); }
   .barrow span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .controls { position:sticky; bottom:0; z-index:3; background:var(--bg); padding:8px 0; border-top:1px solid var(--line); }
@@ -118,6 +121,7 @@
   <h1>GRIDIRON <span>REPLAY</span></h1>
   <select id="game"></select>
   <button id="scoutBtn" title="Team and player tendencies over one or more games">📊 Scouting</button>
+  <span id="warm" class="muted" hidden title="Runs once in the background on worker threads, then cached"><span class="bar mini"><b></b></span> <span id="warmTxt"></span></span>
   <div id="board"></div>
 </header>
 
@@ -1201,14 +1205,38 @@ async function openScout(opts = {}) {
   await loadScout();
 }
 function closeScout() { document.body.classList.remove('scouting'); $('#scout').hidden = true; resize(); }
+let scoutSeq = 0;
+const progressBar = (p, label) => `<div class="prog"><div class="row"><span>${label}</span><span class="muted" style="margin-left:auto">${p.done} / ${p.total} games · ${p.threads} threads</span></div>
+  <div class="bar"><b style="width:${100 * p.done / Math.max(1, p.total)}%"></b></div></div>`;
 async function loadScout() {
-  const g = scout.games.join(',');
-  const url = scout.kind === 'team' ? `/api/report?team=${scout.team}&side=${scout.side}&games=${g}` : `/api/report?player=${scout.player}&games=${g}`;
-  $('#scoutBody').innerHTML = '<p class="muted">Crunching the numbers…</p>';
+  const g = scout.games.join(','), seq = ++scoutSeq;
+  const q = scout.kind === 'team' ? `team=${scout.team}&side=${scout.side}&games=${g}` : `player=${scout.player}&games=${g}`;
+  $('#scoutBody').innerHTML = '<p class="muted">Loading…</p>';
   renderScoutBar();
-  scout.data = await api(url);
-  renderScout();
+  let waiting = true;
+  (async () => { // live progress while the worker pool prepares this report's games
+    while (waiting && seq === scoutSeq) {
+      const p = await api('/api/progress?' + q).catch(() => null);
+      if (!waiting || seq !== scoutSeq || !p) return;
+      if (p.done < p.total) $('#scoutBody').innerHTML = progressBar(p, 'Crunching tracking data for this report…');
+      await new Promise(r => setTimeout(r, 150));
+    }
+  })();
+  const data = await api('/api/report?' + q);
+  waiting = false;
+  if (seq !== scoutSeq) return; // a newer selection won
+  scout.data = data; renderScout();
 }
+// header: background preparation of every game's scouting data (once per server; cached on disk afterwards)
+(async function watchWarmup() {
+  for (;;) {
+    const p = await api('/api/progress').catch(() => null), w = $('#warm');
+    if (!p || p.done >= p.total) { w.hidden = true; return; }
+    w.hidden = false; w.querySelector('b').style.width = `${100 * p.done / p.total}%`;
+    $('#warmTxt').textContent = `Preparing scouting data ${p.done}/${p.total} games`;
+    await new Promise(r => setTimeout(r, 500));
+  }
+})();
 const TEAMS = () => [...new Set(games.flatMap(g => [g.homeTeamAbbr, g.visitorTeamAbbr]))].sort();
 function renderScoutBar() {
   const d = scout.data, avail = d?.games || [];

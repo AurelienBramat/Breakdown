@@ -106,8 +106,9 @@ The repo includes the dataset (~826 MB), so the first clone takes a while.
 |---|---|---|
 | `PORT` | `3000` | HTTP port |
 | `DATA_DIR` | `nfl-big-data-bowl-regional-event-data-main/data` | Folder containing the CSVs |
+| `SCOUT_THREADS` | CPU cores − 1, max 6 | Worker threads that prepare scouting data in the background (lower it on low-memory machines; each holds one ~7 MB game while working) |
 
-Startup parses the game, play, player and PFF CSVs in about 5–10 seconds. Each game's tracking file loads on first request and is cached; the cache holds 6 games.
+Startup parses the game, play, player and PFF CSVs in about 1 second. Each game's tracking file loads on first replay and is cached; the cache holds 6 games. Scouting data is prepared in the background on worker threads right after startup (all 122 games in about 2–3 s on a modern laptop, progress shown in the header) and saved to `app/.cache/`, so later starts are instant.
 
 ---
 
@@ -122,6 +123,7 @@ Startup parses the game, play, player and PFF CSVs in about 5–10 seconds. Each
 ┌──────────────┴──────────── node (app/server.js, stdlib only) ────────────────┐
 │ startup: parse games / plays / players / PFF scouting  →  team tendencies    │
 │ on demand: parse tracking_<gameId>.csv → frames per play (FIFO cache, 6 games)│
+│ background: worker pool (summaries.js) → per-game scouting summaries, cached in app/.cache │
 └──────────────▲──────────────────────────────────────────────────────────────┘
                │ fs
         data/*.csv (NFL Big Data Bowl)
@@ -129,6 +131,7 @@ Startup parses the game, play, player and PFF CSVs in about 5–10 seconds. Each
 
 Design choices:
 - **No dependencies, on purpose:** a ~20-line CSV parser and Node's `http` module cover everything we need. The whole app is two files you can read in one sitting.
+- **Scouting never blocks the server:** a pool of worker threads (`summaries.js` + `summary-worker.js`) turns each game's tracking file into a small summary (time to throw, separation at the throw). There is one job per game; a game a report is waiting on jumps to the front of the queue; no job runs twice. Results are written to a disk cache atomically, keyed on the code version and each tracking file's size and modification time, so the cache can never be stale. Reports themselves are then plain arithmetic over in-memory data (~0.1 s). Measured on 24 cores: cold report 0.5–0.9 s on the main thread before; now 122 games in ~2.2 s in the background, and a report requested at startup with no cache is back in ~0.3 s.
 - **The simulation runs in the browser:** it's pure math over about 50 frames × 22 players, so it finishes in milliseconds and every UI change re-runs it instantly.
 - **Normalised coordinates:** the client flips plays where the offense went left, so the offense always attacks right. That keeps the drawing code and the simulation free of direction checks.
 
@@ -196,6 +199,7 @@ All endpoints are `GET` and return JSON.
 | `/api/players` | Every player who appears in the PFF data: `{ id, name, pos, team }` |
 | `/api/report?team=<abbr>&side=off\|def&games=<id,id>` | Team scouting report: `{ stats, league, leaders, top, games, selected }`. `games` is optional (default: all of the team's games) |
 | `/api/report?player=<nflId>&games=<id,id>` | Player scouting report: `{ player, snaps, roles, aligned, me, grid, qb, league, top }` |
+| `/api/progress` (optional `team=` or `player=`, `games=`) | Scouting preparation progress: `{ done, total, running, threads }`, for all games or just the ones a report needs |
 
 Each entity in `ents` looks like `{ id, jersey, team, name, pos, role, lined, hit, hurry, sack, beaten, blocked, f: [[x, y, speed, orientation, direction], …] }`, with one entry in `f` per frame. The ball has `id: "ball"`.
 
@@ -207,6 +211,9 @@ Each entity in `ents` looks like `{ id, jersey, team, name, pos, role, lined, hi
 app/
   server.js        Node stdlib HTTP server: CSV parsing, team tendencies, tracking cache, JSON API
   report.js        Scouting engine: parses targets/results from the play-by-play, aggregates team, player and league stats, tracking summaries (time to throw, separation) per game; self-check: node app/report.js
+  summaries.js     Worker pool + priority queue + disk cache for scouting summaries; progress for the UI; self-check: node app/summaries.js
+  summary-worker.js  One worker thread: parse a game's tracking file and summarize it
+  tracking-summary.js  Shared tracking parser (replay + workers) and the per-game summary
   index.html       Whole front-end: layout/CSS, canvas renderer, playback, what-if UI and engine
 nfl-big-data-bowl-regional-event-data-main/
   data/            Big Data Bowl CSVs (+ tracking/ per game)
