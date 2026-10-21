@@ -85,6 +85,8 @@
   .verdict { font-size:11px; font-weight:700; padding:1px 7px; border-radius:10px; }
   .verdict.open { background:var(--good); color:#06180e; } .verdict.tight { background:var(--warn); color:#111; } .verdict.covered { background:var(--bad); color:#fff; }
   .headline { font-size:15px; font-weight:600; }
+  .changes div { display:flex; justify-content:space-between; gap:8px; padding:3px 6px; border-radius:6px; } .changes div:hover { background:#24323c; }
+  .changes a, .tab a { color:var(--acc); text-decoration:none; }
   .story { display:grid; grid-template-columns:44px 1fr; gap:8px; padding:4px 6px; border-radius:6px; cursor:pointer; }
   .story:hover { background:#24323c; } .story span:first-child { font-variant-numeric:tabular-nums; }
 </style>
@@ -155,7 +157,8 @@ const OL = ['T', 'G', 'C'];
 let games = [], plays = [], shown = [], cur = null, frame = 0, playing = false, lastTick = 0, speed = 0.5;
 let sel = null, hover = null, view = null, filter = 'All', offFilter = 'All', qFilter = 0, tab = 'play';
 const show = { names: false, routes: true, sep: true, trails: false, full: false };
-const wi = { target: null, edits: {}, drawing: false, cov: 'played', depth: 1, route: {} };
+const wi = { sel: null, mode: null, edits: {}, route: {}, align: {}, assign: {}, cov: 'played', depth: 1, throwAt: null, throwTo: null };
+const hist = []; // undo stack of what-if snapshots
 let sim = null, viewSim = false;
 
 const api = p => fetch(p).then(r => r.json());
@@ -238,7 +241,7 @@ async function loadPlay(id) {
   cur.E = ev.find(([f, e]) => f > cur.S && END.includes(e))?.[0] ?? cur.nFrames - 1;
   cur.endEvent = cur.events[cur.E] || 'end';
   cur.realEnd = cur.nFrames - 1; cur.recon = null; reconstruct();
-  sel = hover = null; wi.target = null; wi.edits = {}; wi.route = {}; wi.drawing = false; wi.cov = 'played'; sim = null; viewSim = false;
+  sel = hover = null; resetWi(); hist.length = 0; sim = null; viewSim = false;
   frame = 0; playing = true;
   computeView(); renderList(); renderBoard(); renderPlayTab(); renderDefenseTab(); renderWhatIf(); renderMarks(); updateModeBadge(); draw();
   $('#empty').hidden = true;
@@ -361,7 +364,8 @@ const toYd = (cx, cy) => [cx / k() + view.x0, view.y0 + view.w / 2 - cy / k()];
 
 // ================= drawing =================
 const pos = (e, f) => (viewSim && sim?.pos[e.id]?.[f]) || e.f[f];
-const maxFrame = () => viewSim ? cur.E : cur.nFrames - 1;
+const maxFrame = () => viewSim ? sim.end : cur.nFrames - 1;
+const throwFrame = () => viewSim ? sim.T : cur.E;
 function separation(e, f) {
   const me = pos(e, f), opp = cur.ents.filter(o => o.id !== 'ball' && o.off !== e.off);
   return opp.length ? Math.min(...opp.map(o => dist(me, pos(o, f)))) : null;
@@ -405,40 +409,48 @@ function draw() {
   const t = (frame - cur.S) / 10;
   $('#clock').textContent = `${t < 0 ? 'pre-snap ' : '+'}${Math.abs(t).toFixed(1)}s`;
 
+  const changed = id => viewSim && sim.changed.has(id);
   // route chart: whole route from snap to the throw
-  if (show.routes) for (const e of players) if (e.off && (e.role === 'Pass Route' || (viewSim && sim?.pos[e.id]))) {
-    const pts = []; for (let f = cur.S; f <= cur.E; f++) pts.push(px(...pos(e, f)));
-    path(pts, viewSim && sim?.pos[e.id] ? '#f5b82e' : 'rgba(255,255,255,.55)', 2 * DPR);
+  if (show.routes) for (const e of players) if (e.off && (e.role === 'Pass Route' || wi.edits[e.id])) {
+    const pts = []; for (let f = cur.S; f <= throwFrame(); f++) pts.push(px(...pos(e, f)));
+    path(pts, changed(e.id) ? '#f5b82e' : 'rgba(255,255,255,.55)', 2 * DPR);
   }
-  // planned what-if routes (while editing)
-  if (tab === 'whatif') for (const [id, pts] of Object.entries(wi.edits)) {
-    const e = cur.ents.find(e => e.id === id), all = [e.f[cur.S], ...pts].map(p => px(p[0], p[1]));
-    path(all, '#f5b82e', 2.5 * DPR, [8 * DPR, 6 * DPR]);
-    if (wi.drawing && id === wi.target) pts.forEach(p => { ctx.fillStyle = '#f5b82e'; ctx.beginPath(); ctx.arc(...px(...p), 4 * DPR, 0, 7); ctx.fill(); });
+  // what-if plan: drawn routes (drag the dots), zone spots, man matchups, blitzes
+  if (tab === 'whatif') {
+    for (const [id, pts] of Object.entries(wi.edits)) {
+      const all = [snapSpot(byId(id)), ...pts].map(p => px(p[0], p[1]));
+      path(all, '#f5b82e', 2.5 * DPR, [8 * DPR, 6 * DPR]);
+      if (id === wi.sel) pts.forEach(p => { ctx.fillStyle = '#f5b82e'; ctx.strokeStyle = '#000'; ctx.lineWidth = DPR; ctx.beginPath(); ctx.arc(...px(...p), 5 * DPR, 0, 7); ctx.fill(); ctx.stroke(); });
+    }
+    for (const [id, a] of Object.entries(wi.assign)) {
+      const d = byId(id), dp = px(...pos(d, frame)); ctx.setLineDash([5 * DPR, 4 * DPR]); ctx.lineWidth = 1.8 * DPR;
+      if (a.t === 'zone') { ctx.strokeStyle = '#7cc8ff'; ctx.beginPath(); ctx.arc(...px(...a.p), 4 * k(), 0, 7); ctx.stroke(); ctx.beginPath(); ctx.moveTo(...px(...snapSpot(d))); ctx.lineTo(...px(...a.p)); ctx.stroke(); }
+      if (a.t === 'man') { ctx.strokeStyle = '#7cc8ff'; ctx.beginPath(); ctx.moveTo(...dp); ctx.lineTo(...px(...pos(byId(a.r), frame))); ctx.stroke(); }
+      if (a.t === 'blitz' && frame <= cur.S + 2) { const q = cur.ents.find(e => e.off && e.role === 'Pass'); if (q) { ctx.setLineDash([]); path([dp, px(...pos(q, frame))], '#e5544b', 2 * DPR); } }
+      ctx.setLineDash([]);
+    }
   }
   if (show.trails) for (const e of players) {
     ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = DPR; ctx.beginPath();
     for (let f = Math.max(0, frame - 25); f <= frame; f++) ctx.lineTo(...px(...pos(e, f))); ctx.stroke();
   }
   // ghosts of the original players that the what-if moved
-  if (viewSim && sim) for (const e of players) if (sim.pos[e.id]) {
+  if (viewSim && frame <= cur.realEnd) for (const e of players) if (changed(e.id)) {
     ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.5 * DPR; ctx.setLineDash([3 * DPR, 3 * DPR]);
     ctx.beginPath(); ctx.arc(...px(...e.f[frame]), R, 0, 7); ctx.stroke(); ctx.setLineDash([]);
   }
   // "who's open" rings around route runners after the snap
-  if (show.sep && frame >= cur.S && frame <= cur.realEnd) for (const e of players) if (e.off && (e.role === 'Pass Route' || (viewSim && sim?.pos[e.id]))) {
+  if (show.sep && frame >= cur.S && frame <= (viewSim ? sim.T : cur.realEnd)) for (const e of players) if (e.off && (e.role === 'Pass Route' || wi.edits[e.id])) {
     const s = separation(e, frame), [x, y] = px(...pos(e, frame));
     ctx.strokeStyle = sepColor(s); ctx.lineWidth = 3 * DPR; ctx.beginPath(); ctx.arc(x, y, R + 4 * DPR, 0, 7); ctx.stroke();
     ctx.fillStyle = sepColor(s); ctx.font = `bold ${11 * DPR}px system-ui`; ctx.textAlign = 'center'; ctx.fillText(s.toFixed(1), x, y - R - 11 * DPR);
   }
   for (const e of players) {
     const p = pos(e, frame), [x, y] = px(p[0], p[1]), o = p[3] * Math.PI / 180;
-    const pick = tab === 'whatif' && canRoute(e);
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 * DPR; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.sin(o) * R * 1.7, y - Math.cos(o) * R * 1.7); ctx.stroke();
     ctx.fillStyle = COLORS[e.team] || '#888'; ctx.beginPath(); ctx.arc(x, y, R, 0, 7); ctx.fill();
-    const hl = e.id === sel || e.id === wi.target && tab === 'whatif';
+    const hl = tab === 'whatif' ? e.id === wi.sel : e.id === sel;
     ctx.lineWidth = (hl ? 3.5 : 1.5) * DPR; ctx.strokeStyle = hl ? '#f5b82e' : e.off ? '#fff' : '#0b0b0b'; ctx.stroke();
-    if (pick && e.id !== wi.target && frame <= cur.S + 2) { ctx.setLineDash([2 * DPR, 3 * DPR]); ctx.strokeStyle = '#f5b82e'; ctx.lineWidth = 1.5 * DPR; ctx.beginPath(); ctx.arc(x, y, R + 3 * DPR, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
     ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.max(9 * DPR, R * 0.95)}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(e.jersey ?? '', x, y + DPR);
     if (show.names || e.id === sel || e.id === hover) {
       ctx.font = `600 ${10.5 * DPR}px system-ui`; const n = last(e.name), w = ctx.measureText(n).width;
@@ -448,17 +460,18 @@ function draw() {
   }
   const b = cur.ents.find(e => e.id === 'ball');
   if (b) { const [x, y] = px(...pos(b, frame)); ctx.fillStyle = '#8b4a1c'; ctx.strokeStyle = '#fff'; ctx.lineWidth = DPR; ctx.beginPath(); ctx.ellipse(x, y, 6 * DPR, 4 * DPR, 0, 0, 7); ctx.fill(); ctx.stroke(); }
-  if (frame === cur.E && frame > cur.S) {
+  if (frame === throwFrame() && frame > cur.S) {
     ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillRect(cv.width / 2 - 90 * DPR, 10 * DPR, 180 * DPR, 26 * DPR);
     ctx.fillStyle = '#f5b82e'; ctx.font = `bold ${13 * DPR}px system-ui`; ctx.textAlign = 'center';
-    ctx.fillText(/sack/.test(cur.endEvent) ? 'SACK' : 'BALL THROWN', cv.width / 2, 23 * DPR);
+    ctx.fillText((viewSim ? sim.result.kind === 'sack' : /sack/.test(cur.endEvent)) ? 'SACK' : 'BALL THROWN', cv.width / 2, 23 * DPR);
   }
-  if (cur.recon && frame >= cur.recon.start) {
-    const rp = cur.recon.endPt;
+  const after = viewSim ? frame > sim.T : cur.recon && frame >= cur.recon.start;
+  if (after) {
+    const rp = viewSim ? sim.result.spot : cur.recon.endPt;
     if (rp) { const [x, y] = px(...rp); ctx.strokeStyle = '#f5b82e'; ctx.lineWidth = 3 * DPR; const r = 7 * DPR;
       ctx.beginPath(); ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r); ctx.stroke();
       line(rp[0], 'rgba(245,184,46,.5)', 1.5 * DPR); }
-    const msg = 'RECONSTRUCTED FROM PLAY-BY-PLAY · tracking ends at the throw';
+    const msg = viewSim ? 'SIMULATED OUTCOME · what-if' : 'RECONSTRUCTED FROM PLAY-BY-PLAY · tracking ends at the throw';
     ctx.font = `600 ${11 * DPR}px system-ui`; const w = ctx.measureText(msg).width;
     ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(10 * DPR, cv.height - 30 * DPR, w + 20 * DPR, 22 * DPR);
     ctx.fillStyle = '#f5b82e'; ctx.textAlign = 'left'; ctx.fillText(msg, 20 * DPR, cv.height - 19 * DPR);
@@ -470,7 +483,7 @@ function draw() {
 const EVENT_NAMES = { ball_snap: 'Snap', pass_forward: 'Throw', pass_arrived: 'Arrives', pass_outcome_caught: 'Catch', pass_outcome_incomplete: 'Incomplete', pass_outcome_interception: 'INT', pass_outcome_touchdown: 'TD', qb_sack: 'Sack', qb_strip_sack: 'Strip sack', play_action: 'Play action', man_in_motion: 'Motion', tackle: 'Tackle', out_of_bounds: 'Out of bounds', first_contact: 'Contact', fumble: 'Fumble', touchdown: 'TD', run: 'Scramble' };
 function renderMarks() {
   const m = maxFrame(), seen = new Set();
-  $('#marks').innerHTML = Object.entries(cur.events).filter(([f, e]) => +f <= m && EVENT_NAMES[e.replace('autoevent_', '').replace('passforward', 'pass_forward').replace('ballsnap', 'ball_snap')])
+  $('#marks').innerHTML = Object.entries(viewSim ? sim.events : cur.events).filter(([f, e]) => +f <= m && EVENT_NAMES[e.replace('autoevent_', '').replace('passforward', 'pass_forward').replace('ballsnap', 'ball_snap')])
     .map(([f, e]) => [f, EVENT_NAMES[e.replace('autoevent_', '').replace('passforward', 'pass_forward').replace('ballsnap', 'ball_snap')]])
     .filter(([, n]) => !seen.has(n) && seen.add(n))
     .map(([f, n]) => `<span data-f="${f}" style="left:${f / m * 100}%">${n}</span>`).join('');
@@ -482,7 +495,7 @@ function togglePlay() { if (!cur) return; if (frame >= maxFrame()) frame = viewS
 function seek(f) { if (!cur) return; frame = Math.max(0, Math.min(maxFrame(), f)); playing = false; syncPlay(); draw(); }
 $('#play').onclick = togglePlay;
 $('#prev').onclick = () => step(-1); $('#next').onclick = () => step(1);
-$('#toSnap').onclick = () => seek(cur.S); $('#toThrow').onclick = () => seek(cur.E);
+$('#toSnap').onclick = () => seek(cur.S); $('#toThrow').onclick = () => seek(throwFrame());
 $('#speeds').innerHTML = [0.25, 0.5, 1, 2].map(s => `<button data-s="${s}" class="${s === speed ? 'on' : ''}">${s}×</button>`).join('');
 $('#speeds').onclick = e => { if (e.target.dataset.s) { speed = +e.target.dataset.s; $$('#speeds button').forEach(b => b.classList.toggle('on', b === e.target)); } };
 $$('.toggles button[data-o]').forEach(b => b.onclick = () => { show[b.dataset.o] = !show[b.dataset.o]; b.classList.toggle('on'); if (b.dataset.o === 'full') computeView(); draw(); });
@@ -496,8 +509,10 @@ function tick(t) {
 }
 requestAnimationFrame(tick);
 document.onkeydown = e => {
-  if (e.target.tagName === 'INPUT' && e.target.type === 'search') return;
-  const map = { ' ': togglePlay, ArrowLeft: () => seek(frame - 1), ArrowRight: () => seek(frame + 1), s: () => seek(cur.S), t: () => seek(cur.E), n: () => step(1), p: () => step(-1) };
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && cur) { e.preventDefault(); undo(); return; }
+  const map = { ' ': togglePlay, ArrowLeft: () => seek(frame - 1), ArrowRight: () => seek(frame + 1), s: () => seek(cur.S), t: () => seek(throwFrame()), n: () => step(1), p: () => step(-1),
+    Escape: () => { if (wi.mode) { wi.mode = null; rerun(); } } };
   const fn = map[e.key.length === 1 ? e.key.toLowerCase() : e.key]; if (fn && cur) { e.preventDefault(); fn(); }
 };
 
@@ -510,42 +525,84 @@ function setTab(t) {
   draw();
 }
 
-// ================= field mouse: hover names, select players, draw routes =================
+// ================= field mouse: hover, select, drag alignments and route points, place zones =================
 function hitAt(ev) {
   const r = cv.getBoundingClientRect(), yd = toYd((ev.clientX - r.left) * DPR, (ev.clientY - r.top) * DPR);
   const e = cur?.ents.filter(e => e.id !== 'ball').sort((a, b) => dist(pos(a, frame), yd) - dist(pos(b, frame), yd))[0];
   return { yd, e: e && dist(pos(e, frame), yd) < Math.max(1.2, 9 / k() * DPR) ? e : null, r };
 }
+let drag = null, justDragged = false;
+cv.onmousedown = ev => {
+  if (!cur || tab !== 'whatif') return;
+  const { e, yd } = hitAt(ev), pts = wi.edits[wi.sel];
+  const wp = pts ? pts.findIndex(p => dist(p, yd) < Math.max(1, 8 * DPR / k())) : -1;
+  if (wp >= 0) drag = { kind: 'wp', i: wp, start: snapWi(), moved: false };
+  else if (e && frame <= cur.S) drag = { kind: 'align', e, from: yd, orig: wi.align[e.id] || [0, 0], start: snapWi(), moved: false };
+};
 cv.onmousemove = ev => {
   if (!cur) return;
-  const { e, r } = hitAt(ev), tip = $('#tip');
-  cv.style.cursor = wi.drawing && tab === 'whatif' ? 'crosshair' : e ? 'pointer' : 'default';
+  const { e, r, yd } = hitAt(ev), tip = $('#tip');
+  if (drag) {
+    if (drag.kind === 'wp') { wi.edits[wi.sel][drag.i] = yd; drag.moved = true; }
+    else if (drag.moved || dist(yd, drag.from) > 0.4) {
+      const s = drag.e.f[cur.S], nx = s[0] + drag.orig[0] + yd[0] - drag.from[0], ny = s[1] + drag.orig[1] + yd[1] - drag.from[1];
+      const x = drag.e.off ? Math.min(nx, cur.los - 0.5) : Math.max(nx, cur.los + 0.5); // nobody lines up offside
+      wi.align[drag.e.id] = [x - s[0], Math.max(0.5, Math.min(W - 0.5, ny)) - s[1]]; drag.moved = true;
+    }
+    if (drag.moved) { tip.style.display = 'none'; rerun(true); }
+    return;
+  }
+  const mode = tab === 'whatif' && wi.mode;
+  cv.style.cursor = mode ? 'crosshair' : e ? (tab === 'whatif' && frame <= cur.S ? 'grab' : 'pointer') : 'default';
   if (e?.id !== hover) { hover = e?.id ?? null; if (!playing) draw(); }
   if (e) { tip.style.display = 'block'; tip.style.left = ev.clientX - r.left + 14 + 'px'; tip.style.top = ev.clientY - r.top + 10 + 'px'; tip.innerHTML = `#${e.jersey} <b>${e.name}</b> · ${e.pos} · ${e.role || ''}`; }
   else tip.style.display = 'none';
 };
-cv.onmouseleave = () => { $('#tip').style.display = 'none'; hover = null; };
+cv.onmouseup = () => {
+  if (drag?.moved) { hist.push(drag.start); if (drag.kind === 'wp') wi.route[wi.sel] = 'Custom'; else wi.sel = drag.e.id; justDragged = true; rerun(); }
+  drag = null;
+};
+cv.onmouseleave = () => { $('#tip').style.display = 'none'; hover = null; if (drag) cv.onmouseup(); };
 cv.onclick = ev => {
   if (!cur) return;
+  if (justDragged) { justDragged = false; return; }
   const { e, yd } = hitAt(ev);
-  if (tab === 'whatif' && wi.drawing && wi.target && !(e && canRoute(e) && e.id !== wi.target)) { (wi.edits[wi.target] ||= []).push(yd); wi.route[wi.target] = 'Custom'; rerun(); return; }
-  if (tab === 'whatif' && e && canRoute(e)) { wi.target = e.id; wi.drawing = false; renderWhatIf(); draw(); return; }
+  if (tab === 'whatif') {
+    const s = cur.ents.find(x => x.id === wi.sel);
+    if (wi.mode === 'draw' && s && !(e && e.id !== s.id)) return change(() => { (wi.edits[s.id] ||= []).push(yd); wi.route[s.id] = 'Custom'; });
+    if (wi.mode === 'zone' && s) return change(() => { wi.assign[s.id] = { t: 'zone', p: yd }; wi.mode = null; });
+    if (wi.mode === 'man' && s && e?.off && e.role !== 'Pass') return change(() => { wi.assign[s.id] = { t: 'man', r: e.id }; wi.mode = null; });
+    wi.sel = e?.id ?? null; wi.mode = null; renderWhatIf(); draw(); return;
+  }
   sel = e?.id ?? null;
   if (sel && tab !== 'play') setTab('play');
   draw();
 };
 
-// ================= what-if panel =================
+// ================= what-if state: every change is undoable and can be saved =================
 const canRoute = e => e.off && e.role !== 'Pass' && !OL.includes(e.pos);
+const SCEN_KEYS = ['edits', 'route', 'align', 'assign', 'cov', 'depth', 'throwAt', 'throwTo'];
+const snapWi = () => JSON.stringify(Object.fromEntries(SCEN_KEYS.map(k => [k, wi[k]])));
+function resetWi() { Object.assign(wi, { sel: null, mode: null, edits: {}, route: {}, align: {}, assign: {}, cov: 'played', throwAt: null, throwTo: null }); }
+function change(fn) { hist.push(snapWi()); fn(); rerun(); }
+function undo() { if (!hist.length) return; Object.assign(wi, JSON.parse(hist.pop()), { mode: null }); rerun(); }
+const isActive = () => Object.values(wi.edits).some(p => p.length) || Object.keys(wi.align).length || Object.keys(wi.assign).length || wi.cov !== 'played' || wi.throwAt != null || wi.throwTo != null;
+const SKEY = 'gridiron-scenarios';
+const savedAll = () => { try { return JSON.parse(localStorage.getItem(SKEY)) || {}; } catch { return {}; } };
+const playKey = () => `${cur.play.gameId}-${cur.play.playId}`;
+function storeSaved(list) { const all = savedAll(); all[playKey()] = list; try { localStorage.setItem(SKEY, JSON.stringify(all)); } catch { /* private mode: scenarios last for this session only */ } }
+
 // route tree: [downfield yds, outside yds] waypoints relative to the receiver's spot at the snap
 const ROUTES = {
   Hitch: [[6, 0], [4.5, 0]], Slant: [[3, 0], [11, -7]], Flat: [[1, 1], [3, 9]],
   Out: [[10, 0], [10, 9]], Dig: [[12, 0], [12, -14]], Curl: [[12, 0], [10, -1.5]],
   Comeback: [[15, 0], [12, 4]], Post: [[12, 0], [30, -11]], Corner: [[12, 0], [27, 10]],
   Go: [[35, 0]], Seam: [[3, -1], [32, -2]], Wheel: [[2, 6], [28, 9]],
+  Drag: [[2, -1], [4, -16]], Fade: [[30, 4]], 'Stop & go': [[6, 0], [5, 0], [32, 0]],
 };
+const snapSpot = e => { const s = e.f[cur.S], a = wi.align[e.id] || [0, 0]; return [s[0] + a[0], s[1] + a[1]]; };
 function routePoints(e, name) {
-  const s = e.f[cur.S], outward = s[1] >= W / 2 ? 1 : -1;
+  const s = snapSpot(e), outward = s[1] >= W / 2 ? 1 : -1;
   return ROUTES[name].map(([d, o]) => [Math.min(119, s[0] + d * (o === 0 || d > 3 ? wi.depth : 1)), Math.max(1, Math.min(W - 1, s[1] + o * outward))]);
 }
 function covOptions() {
@@ -558,46 +615,105 @@ function covOptions() {
     ['Zone', 'Zone', 'Defenders drop to areas and break on whoever enters'],
   ];
 }
+
+// ================= what-if panel =================
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[c]);
+const byId = id => cur.ents.find(e => e.id === id);
+const tag = e => `#${e.jersey} ${last(e.name)}`;
+function changesList() {
+  const out = [];
+  for (const id in wi.route) out.push([`${tag(byId(id))}: ${wi.route[id]} route`, 'route:' + id]);
+  for (const id in wi.align) out.push([`${tag(byId(id))}: moved ${Math.hypot(...wi.align[id]).toFixed(1)} yds pre-snap`, 'align:' + id]);
+  for (const [id, a] of Object.entries(wi.assign)) out.push([`${tag(byId(id))}: ${a.t === 'blitz' ? 'blitz' : a.t === 'man' ? 'man on ' + tag(byId(a.r)) : 'zone drop'}`, 'assign:' + id]);
+  if (wi.cov !== 'played') out.push([`Defense call: ${covOptions().find(c => c[0] === wi.cov)[1]}`, 'cov:']);
+  if (wi.throwAt != null) out.push([`Throw at ${wi.throwAt.toFixed(1)}s`, 'throwAt:']);
+  if (wi.throwTo) out.push([`Throw to ${tag(byId(wi.throwTo))}`, 'throwTo:']);
+  return out;
+}
 function renderWhatIf() {
   if (!cur) return;
-  const recv = cur.ents.filter(canRoute).sort((a, b) => (b.role === 'Pass Route') - (a.role === 'Pass Route') || b.f[cur.S][1] - a.f[cur.S][1]);
-  const t = cur.ents.find(e => e.id === wi.target);
-  const edited = Object.keys(wi.edits).length;
-  $('#tab-whatif').innerHTML = `
-    <div class="step"><b><i>1</i> Pick a player to change</b>
-      <div class="recv">${recv.map(e => `<button data-r="${e.id}" class="${e.id === wi.target ? 'on' : ''}">#${e.jersey} ${e.name} <small>${e.pos} · ${wi.route[e.id] ? '✎ ' + wi.route[e.id] : e.role === 'Pass Route' ? 'ran a route' : 'stayed in to block'}</small></button>`).join('')}</div>
-      <p class="muted" style="margin:6px 0 0">…or click a dotted player on the field.</p></div>
-    <div class="step" ${t ? '' : 'style="opacity:.4;pointer-events:none"'}><b><i>2</i> Give ${t ? last(t.name) : 'him'} a new route</b>
-      <div class="grid">${Object.keys(ROUTES).map(r => `<button data-route="${r}" class="${t && wi.route[t.id] === r ? 'on' : ''}">${r}</button>`).join('')}</div>
+  const e = byId(wi.sel), bySide = off => cur.ents.filter(x => x.id !== 'ball' && x.off === off).sort((a, b) => b.f[cur.S][1] - a.f[cur.S][1]);
+  const touched = new Set(changesList().map(([, k]) => k.split(':')[1]));
+  const chip = x => `<button data-sel="${x.id}" class="${x.id === wi.sel ? 'on' : ''}" title="${x.name} · ${x.pos}">${x.jersey} ${last(x.name)}${touched.has(x.id) ? ' <span class="warn">●</span>' : ''}</button>`;
+  let body;
+  if (!e) body = '<p class="muted">Click any player on the field, or pick one above.</p>';
+  else if (canRoute(e)) body = `<div class="grid">${Object.keys(ROUTES).map(r => `<button data-route="${r}" class="${wi.route[e.id] === r ? 'on' : ''}">${r}</button>`).join('')}</div>
       <div class="row" style="margin-top:6px"><span class="muted">Depth</span>${[[0.7, 'Short'], [1, 'Normal'], [1.4, 'Deep']].map(([v, n]) => `<button data-depth="${v}" class="${wi.depth === v ? 'on' : ''}">${n}</button>`).join('')}</div>
-      <div class="row" style="margin-top:6px"><button id="drawBtn" class="${wi.drawing ? 'on' : ''}">✎ ${wi.drawing ? 'Click the field to add points…' : 'Draw my own'}</button>
-        ${t && wi.edits[t.id] ? `<button id="undoPt">Undo point</button><button id="rmRoute">Original route</button>` : ''}</div></div>
-    <div class="step"><b><i>3</i> Choose the defense call</b>
+      <div class="row" style="margin-top:6px"><button data-act="draw" class="${wi.mode === 'draw' ? 'on' : ''}">✎ ${wi.mode === 'draw' ? 'Click the field to add points… (Esc to finish)' : 'Draw my own'}</button>
+        ${wi.edits[e.id] ? '<button data-act="undopt">Undo point</button><button data-act="rmroute">Real route</button>' : ''}</div>
+      ${wi.edits[e.id] ? '<p class="muted" style="margin:6px 0 0">Drag the gold dots on the field to fine-tune the route.</p>' : ''}`;
+  else if (e.off && e.role === 'Pass') body = '<p class="muted">Use the Quarterback controls below to change when and where he throws.</p>';
+  else if (e.off) body = '<p class="muted">Linemen keep their real blocks.</p>';
+  else {
+    const a = wi.assign[e.id], job = wi.mode === 'man' ? 'man' : wi.mode === 'zone' ? 'zone' : a?.t || 'real';
+    const recv = cur.ents.filter(x => x.off && x.role !== 'Pass' && !OL.includes(x.pos));
+    body = `<div class="cov">${[['real', `As played (${e.role === 'Pass Rush' ? 'rushed the QB' : 'coverage'})`], ['blitz', 'Blitz the QB'], ['man', 'Man coverage on…'], ['zone', 'Zone drop…']]
+        .map(([v, n]) => `<button data-job="${v}" class="${job === v ? 'on' : ''}">${n}</button>`).join('')}</div>
+      ${job === 'man' ? `<div class="chips">${recv.map(r => `<button data-man="${r.id}" class="${a?.r === r.id ? 'on' : ''}">${tag(r)}</button>`).join('')}</div><p class="muted" style="margin:6px 0 0">…or click the receiver on the field.</p>` : ''}
+      ${job === 'zone' ? `<p class="muted" style="margin:6px 0 0">${wi.mode === 'zone' ? '👉 Click the field where he should drop.' : 'Zone set. <a href="#" data-job="zone">Move it</a>'}</p>` : ''}`;
+  }
+  if (e) body += `<p class="muted" style="margin:8px 0 0">${wi.align[e.id] ? `Moved ${Math.hypot(...wi.align[e.id]).toFixed(1)} yds pre-snap · <a href="#" data-act="unalign">put him back</a>` : 'Drag him on the field (at the snap) to change his alignment.'}</p>`;
+
+  const realT = (cur.E - cur.S) / 10, tNow = wi.throwAt ?? realT, maxT = Math.max(realT, (cur.realEnd - cur.S) / 10) + 2;
+  const routes = cur.ents.filter(x => x.off && (x.role === 'Pass Route' || wi.edits[x.id]));
+  const saved = savedAll()[playKey()] || [], changes = changesList();
+  $('#tab-whatif').innerHTML = `
+    <div class="step"><b><i>1</i> Pick a player</b>
+      <div class="muted" style="margin-bottom:3px">Offense</div><div class="chips">${bySide(true).map(chip).join('')}</div>
+      <div class="muted" style="margin:6px 0 3px">Defense</div><div class="chips">${bySide(false).map(chip).join('')}</div></div>
+    <div class="step"><b><i>2</i> ${e ? `What should ${tag(e)} do?` : 'Change what he does'}</b>${body}</div>
+    <div class="step"><b><i>3</i> Defense call</b>
       <div class="cov">${covOptions().map(([v, n, d]) => `<button data-cov="${v}" class="${wi.cov === v ? 'on' : ''}">${n}<small>${d}</small></button>`).join('')}</div></div>
-    ${edited || wi.cov !== 'played' ? '<button id="resetWi" style="width:100%">↺ Reset what-if</button>' : ''}
-`;
+    <div class="step"><b><i>4</i> Quarterback</b>
+      <div class="row"><span>Throw at <b id="throwLbl">${tNow.toFixed(1)}s</b></span><span class="muted">(real ${realT.toFixed(1)}s${/sack/.test(cur.endEvent) ? ', was sacked' : ''})</span>
+        ${wi.throwAt != null ? '<a href="#" data-act="realtime">real timing</a>' : ''}</div>
+      <input id="throwAt" type="range" min="0.8" max="${maxT.toFixed(1)}" step="0.1" value="${tNow}" style="width:100%;accent-color:var(--acc)">
+      <div class="muted" style="margin:4px 0 3px">Throw to</div>
+      <div class="chips"><button data-to="" class="${wi.throwTo ? '' : 'on'}">Best open (auto)</button>${routes.map(r => `<button data-to="${r.id}" class="${wi.throwTo === r.id ? 'on' : ''}">${tag(r)}</button>`).join('')}</div></div>
+    <div class="step"><b><i>5</i> Scenario</b>
+      ${changes.length ? `<div class="changes">${changes.map(([l, k]) => `<div><span>${l}</span><a href="#" data-rm="${k}" title="Remove">✕</a></div>`).join('')}</div>` : '<p class="muted">No changes yet: this is the real play.</p>'}
+      <div class="row" style="margin-top:6px"><button data-act="undo" ${hist.length ? '' : 'disabled'}>↶ Undo</button><button data-act="reset" ${changes.length ? '' : 'disabled'}>↺ Reset all</button><button data-act="save" ${changes.length ? '' : 'disabled'}>💾 Save</button></div>
+      ${saved.length ? `<div class="muted" style="margin:8px 0 3px">Saved for this play</div><div class="changes">${saved.map((s, i) => `<div><a href="#" data-load="${i}">${esc(s.name)}</a><a href="#" data-del="${i}" title="Delete">✕</a></div>`).join('')}</div>` : ''}</div>`;
   renderResults();
 }
-$('#tab-whatif').onclick = e => {
-  const b = e.target.closest('button'); if (!b) return;
-  const d = b.dataset, t = cur.ents.find(e => e.id === wi.target);
-  if (d.r) { wi.target = d.r; wi.drawing = false; renderWhatIf(); draw(); return; }
-  if (d.route) { wi.edits[t.id] = routePoints(t, d.route); wi.route[t.id] = d.route; wi.drawing = false; }
-  else if (d.depth) { wi.depth = +d.depth; for (const [id, r] of Object.entries(wi.route)) if (ROUTES[r]) wi.edits[id] = routePoints(cur.ents.find(e => e.id === id), r); }
-  else if (b.id === 'drawBtn') { wi.drawing = !wi.drawing; if (wi.drawing) { wi.edits[t.id] = []; wi.route[t.id] = 'Custom'; seek(cur.S); } }
-  else if (b.id === 'undoPt') wi.edits[t.id].pop();
-  else if (b.id === 'rmRoute') { delete wi.edits[t.id]; delete wi.route[t.id]; }
-  else if (d.cov) wi.cov = d.cov;
-  else if (b.id === 'resetWi') { wi.edits = {}; wi.route = {}; wi.cov = 'played'; wi.drawing = false; }
-  rerun();
+$('#tab-whatif').oninput = e => { if (e.target.id === 'throwAt') $('#throwLbl').textContent = (+e.target.value).toFixed(1) + 's'; };
+$('#tab-whatif').onchange = e => { if (e.target.id === 'throwAt') change(() => { wi.throwAt = +e.target.value; }); };
+$('#tab-whatif').onclick = ev => {
+  const b = ev.target.closest('button, a'); if (!b) return;
+  ev.preventDefault();
+  const d = b.dataset, e = byId(wi.sel);
+  if (d.sel) { wi.sel = d.sel; wi.mode = null; if (!sim) seek(cur.S); renderWhatIf(); draw(); return; }
+  if (d.route) return change(() => { wi.edits[e.id] = routePoints(e, d.route); wi.route[e.id] = d.route; wi.mode = null; });
+  if (d.depth) return change(() => { wi.depth = +d.depth; for (const [id, r] of Object.entries(wi.route)) if (ROUTES[r]) wi.edits[id] = routePoints(byId(id), r); });
+  if (d.job === 'real') return change(() => { delete wi.assign[e.id]; wi.mode = null; });
+  if (d.job === 'blitz') return change(() => { wi.assign[e.id] = { t: 'blitz' }; wi.mode = null; });
+  if (d.job === 'man' || d.job === 'zone') { wi.mode = d.job; seek(cur.S); renderWhatIf(); draw(); return; }
+  if (d.man) return change(() => { wi.assign[e.id] = { t: 'man', r: d.man }; wi.mode = null; });
+  if (d.cov) return change(() => { wi.cov = d.cov; });
+  if (d.to !== undefined) return change(() => { wi.throwTo = d.to || null; });
+  if (d.rm) { const [kind, id] = d.rm.split(':');
+    return change(() => { if (kind === 'route') { delete wi.edits[id]; delete wi.route[id]; } else if (kind === 'cov') wi.cov = 'played'; else if (id) delete wi[kind][id]; else wi[kind] = null; }); }
+  if (d.load) { hist.push(snapWi()); Object.assign(wi, JSON.parse(savedAll()[playKey()][+d.load].state), { mode: null }); return rerun(); }
+  if (d.del) { const list = savedAll()[playKey()] || []; list.splice(+d.del, 1); storeSaved(list); renderWhatIf(); return; }
+  switch (d.act) {
+    case 'draw': if (wi.mode === 'draw') { wi.mode = null; return rerun(); } return change(() => { wi.edits[e.id] = []; wi.route[e.id] = 'Custom'; wi.mode = 'draw'; });
+    case 'undopt': return change(() => { wi.edits[e.id].pop(); });
+    case 'rmroute': return change(() => { delete wi.edits[e.id]; delete wi.route[e.id]; });
+    case 'unalign': return change(() => { delete wi.align[e.id]; for (const [id, r] of Object.entries(wi.route)) if (id === e.id && ROUTES[r]) wi.edits[id] = routePoints(e, r); });
+    case 'realtime': return change(() => { wi.throwAt = null; });
+    case 'undo': return undo();
+    case 'reset': return change(() => resetWi());
+    case 'save': { const list = savedAll()[playKey()] || [], name = prompt('Name this scenario', `Scenario ${list.length + 1}`); if (!name) return;
+      list.push({ name, state: snapWi() }); storeSaved(list); renderWhatIf(); return; }
+  }
 };
-// any change re-simulates and replays from the snap
-function rerun() {
-  for (const id in wi.edits) if (!wi.edits[id].length && !wi.drawing) { delete wi.edits[id]; delete wi.route[id]; }
-  const active = Object.values(wi.edits).some(p => p.length) || wi.cov !== 'played';
-  sim = active ? simulate() : null; viewSim = !!sim;
+// any change re-simulates; live = while dragging (keep the frame, skip the panel)
+function rerun(live) {
+  for (const id in wi.edits) if (!wi.edits[id].length && !(wi.mode === 'draw' && id === wi.sel)) { delete wi.edits[id]; delete wi.route[id]; }
+  sim = isActive() ? simulate() : null; viewSim = !!sim;
+  if (live) { frame = Math.min(frame, maxFrame()); draw(); return; }
   updateModeBadge(); renderMarks(); renderWhatIf();
-  frame = cur.S; playing = !!sim && !wi.drawing; syncPlay(); draw();
+  frame = cur.S; playing = !!sim && !wi.mode; syncPlay(); draw();
 }
 function updateModeBadge() {
   $('#modeBadge').hidden = !sim;
@@ -606,103 +722,225 @@ function updateModeBadge() {
 $('#modeBadge').onclick = e => { const m = e.target.dataset.m; if (!m) return; viewSim = m === 'sim'; frame = Math.min(frame, maxFrame()); updateModeBadge(); renderMarks(); draw(); };
 
 function renderResults() {
-  if (!sim) { $('#results').innerHTML = tab === 'whatif' ? '<p class="muted">Changes play out instantly on the field: gold = new route, dashed ring = where the real player was.</p>' : ''; return; }
-  const was = viewSim, rows = cur.ents.filter(e => e.off && (e.role === 'Pass Route' || sim.pos[e.id])).map(e => {
-    viewSim = false; const real = separation(e, cur.E); viewSim = true; const now = separation(e, cur.E); return { e, real, now };
-  });
+  if (!sim) { $('#results').innerHTML = tab === 'whatif' ? '<p class="muted">Every change replays instantly: gold = new route, dashed ring = where the real player was. Drag players at the snap to move them.</p>' : ''; return; }
+  const r = sim.result, p = cur.play, nm = x => x ? `#${x.jersey} ${x.name}` : '';
+  const yd = y => `${y > 0 ? '+' : ''}${y} yds`;
+  const head = { sack: () => `Sacked by ${nm(r.by)} at ${((sim.T - cur.S) / 10).toFixed(1)}s, ${yd(r.yards)}`,
+    catch: () => `Complete to ${nm(r.target)}, ${r.td ? 'TOUCHDOWN' : yd(r.yards)}${r.tackler ? ` (tackled by ${last(r.tackler.name)})` : ''}`,
+    int: () => `INTERCEPTED by ${nm(r.by)}${r.yards ? `, returned ${Math.abs(r.yards)} yds` : ''}`,
+    pbu: () => `Incomplete: ${nm(r.by)} breaks up the pass to ${last(r.target.name)}`, inc: () => `Incomplete: ${nm(r.target)} can't get to the ball` }[r.kind]();
+  const real = { C: `complete, ${yd(p.prePenaltyPlayResult ?? p.playResult)}`, I: 'incomplete', IN: 'intercepted', S: `sack, ${yd(p.playResult)}`, R: `QB scramble, ${yd(p.playResult)}` }[p.passResult] || '-';
+  const at = sim.T, was = viewSim;
+  const rows = cur.ents.filter(e => e.off && (e.role === 'Pass Route' || wi.edits[e.id])).map(e => { viewSim = false; const a = separation(e, cur.E); viewSim = true; return { e, real: a, now: separation(e, at) }; });
   viewSim = was;
-  const best = rows.reduce((a, b) => b.now > a.now ? b : a), bestReal = rows.reduce((a, b) => b.real > a.real ? b : a);
   const v = s => s >= 3 ? ['open', 'OPEN'] : s >= 1.5 ? ['tight', 'TIGHT'] : ['covered', 'COVERED'];
-  $('#results').innerHTML = `<div class="card"><div class="muted">Defense played <b style="color:var(--text)">${sim.mode}</b> · at the ${/sack/.test(cur.endEvent) ? 'sack' : 'throw'} (${((cur.E - cur.S) / 10).toFixed(1)}s)</div>
-    <div class="headline" style="margin:6px 0">Best read: #${best.e.jersey} ${best.e.name}, ${best.now.toFixed(1)} yds open</div>
-    <div class="muted" style="margin-bottom:8px">In the real play it was #${bestReal.e.jersey} ${last(bestReal.e.name)} (${bestReal.real.toFixed(1)} yds).</div>
-    <div class="res"><span class="muted">Receiver</span><span class="muted">Real → What-if</span><span></span>
+  $('#results').innerHTML = `<div class="card"><div class="muted">Simulated outcome · defense played <b style="color:var(--text)">${sim.mode}</b></div>
+    <div class="headline" style="margin:6px 0">${head}</div>
+    <div class="muted" style="margin-bottom:8px">Real play: ${real}. ${r.kind === 'sack' ? '' : `Ball out at ${((at - cur.S) / 10).toFixed(1)}s vs ${((cur.E - cur.S) / 10).toFixed(1)}s for real.`}</div>
+    ${rows.length ? `<div class="res"><span class="muted">Separation at the ${r.kind === 'sack' ? 'sack' : 'throw'}</span><span class="muted">Real → What-if</span><span></span>
     ${rows.map(({ e, real, now }) => { const [c, l] = v(now), d = now - real;
-      return `<span>#${e.jersey} ${last(e.name)}${wi.route[e.id] ? ` <span class="warn">✎ ${wi.route[e.id]}</span>` : ''}</span>
-        <span>${real.toFixed(1)} → <b>${now.toFixed(1)}</b> <span class="${d > 0.3 ? 'good' : d < -0.3 ? 'bad' : 'muted'}">${d >= 0 ? '+' : ''}${d.toFixed(1)}</span></span><span class="verdict ${c}">${l}</span>`; }).join('')}
-    </div></div>
-    <p class="muted">Open = 3+ yds from the nearest defender, tight = 1.5–3. Toggle <b>Original / What-if</b> on the field to compare.</p>`;
+      return `<span>${tag(e)}${wi.route[e.id] ? ` <span class="warn">✎ ${wi.route[e.id]}</span>` : ''}${r.target === e ? ' 🏈' : ''}</span>
+        <span>${real.toFixed(1)} → <b>${now.toFixed(1)}</b> <span class="${d > 0.3 ? 'good' : d < -0.3 ? 'bad' : 'muted'}">${d >= 0 ? '+' : ''}${d.toFixed(1)}</span></span><span class="verdict ${c}">${l}</span>`; }).join('')}</div>` : ''}
+    </div>
+    <p class="muted">How the outcome is decided: the ball is led to the target at ~18 yd/s. It's a catch if he was 1.5+ yds open at the throw or no defender is within 2 yds at the catch; otherwise it's broken up (or picked off if a defender beats him to the spot). He then runs until a defender reaches him. Checked against real throws from games it was not tuned on, it calls catch vs no catch right about 72% of the time (always guessing "catch" gets 69%), so treat it as a hint, not a prediction. Toggle <b>Original / What-if</b> on the field to compare.</p>`;
 }
 
 // ================= the what-if engine =================
-// Offense: edited players run the new route (accelerate, slow down at cuts). Everyone else keeps real tracking.
-// Defense: each cover defender is tied to the receiver he shadowed most in the real play.
-//  - same coverage as played: real track + reaction to the edited receiver (man: full, zone: only near his area)
-//  - forced man: trail the assigned receiver, closing the snap cushion
-//  - forced zone: drop to a landmark and break on whichever receiver enters the area
-// Movement is capped by each defender's real top speed, 7 yd/s² accel and a 0.3s reaction delay.
-// ponytail: hand-tuned reaction rules, swap for a model trained on the tracking data if accuracy matters.
+// Steps the whole play frame by frame (10 Hz) so everyone reacts to everyone:
+// Offense: edited players run their new route (accelerate, slow down at cuts); moved players run their real route
+//   from the new spot; everyone else keeps real tracking, then coasts once the tracking runs out.
+// Defense, per defender:
+//   - "react" (same call as played): real track + reaction to how his receiver moved off the real route
+//     (man: his receiver; zone: whoever is in his area), 0.3s reaction delay
+//   - man (forced call or coach's pick): trail the receiver, closing the snap cushion over ~2s
+//   - zone (forced call or coach's spot): drop to the spot and break on the closest receiver within 7 yds
+//   - blitz: unblocked if rushers outnumber blockers (runs at the QB), otherwise picked up at the line
+//   - real pass rushers keep their real rush; after the tracking ends they keep squeezing the pocket
+// A rusher within 1 yd of the QB before the throw = sack. Then ball flight, catch / breakup / INT and the run.
+// ponytail: hand-tuned rules and thresholds, swap for a model trained on the tracking data if accuracy matters.
 const LAG = 3, DT = 0.1, AMAX = 7;
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const clampF = q => [Math.max(0.5, Math.min(119.5, q[0])), Math.max(0.5, Math.min(W - 0.5, q[1]))];
+function routeTrack(e, pts, start, upto) {
+  const S = cur.S, track = [], top = Math.max(7, ...e.f.map(f => f[2]));
+  let p = start.slice(0, 2), v = start[2], i = 0;
+  track[S] = start;
+  for (let f = S + 1; f <= upto; f++) {
+    v = Math.min(top, v + 5 * DT);
+    let stepLen = v * DT;
+    while (stepLen > 0 && i < pts.length) {
+      const d = dist(p, pts[i]);
+      if (d > stepLen) { p = [p[0] + (pts[i][0] - p[0]) * stepLen / d, p[1] + (pts[i][1] - p[1]) * stepLen / d]; stepLen = 0; }
+      else {
+        stepLen -= d; p = pts[i].slice(); i++;
+        if (i < pts.length) { const a = pts[i - 2] || start, prev = Math.atan2(p[0] - a[0], p[1] - a[1]), next = Math.atan2(pts[i][0] - p[0], pts[i][1] - p[1]);
+          let turn = Math.abs(next - prev); if (turn > Math.PI) turn = 2 * Math.PI - turn; v *= 1 - 0.55 * turn / Math.PI; }
+      }
+    }
+    if (i >= pts.length) v = Math.max(0, v - 8 * DT);
+    const q = track[f - 1], h = (Math.atan2(p[0] - q[0], p[1] - q[1]) * 180 / Math.PI + 360) % 360;
+    track[f] = [p[0], p[1], v, h, h];
+  }
+  return track;
+}
 function simulate() {
-  const { S, E, los } = cur, edits = Object.fromEntries(Object.entries(wi.edits).filter(([, p]) => p.length));
+  const { S, los, realEnd } = cur, edits = Object.fromEntries(Object.entries(wi.edits).filter(([, p]) => p.length));
   const played = cur.play.pff_passCoverageType;
   const mode = wi.cov === 'played' ? played : wi.cov === 'tendency' ? covOptions()[1][1].split(': ')[1] : wi.cov;
-  const off = cur.ents.filter(e => e.off && e.id !== 'ball');
-  const cover = cur.ents.filter(e => !e.off && e.role === 'Coverage');
+  const sameMode = wi.cov === 'played' || mode === played;
+  const ball = cur.ents.find(e => e.id === 'ball'), people = cur.ents.filter(e => e !== ball);
+  const off = people.filter(e => e.off), def = people.filter(e => !e.off);
+  const qb = off.find(e => e.role === 'Pass') || off[0];
+  const T0 = wi.throwAt != null ? S + Math.round(wi.throwAt * 10) : cur.E, MAX = T0 + 90;
+  const sh = e => wi.align[e.id] || [0, 0];
+  const base = (e, f) => { const p = e.f[Math.max(0, Math.min(f, realEnd))], s = sh(e); return [p[0] + s[0], p[1] + s[1], f > realEnd ? 0 : p[2], p[3], p[4]]; };
+
+  const tr = {}, st = new Map();
+  for (const e of cur.ents) {
+    tr[e.id] = []; for (let f = 0; f <= S; f++) tr[e.id][f] = base(e, f);
+    const a = base(e, S), b = base(e, Math.max(0, S - 1));
+    st.set(e, { p: a.slice(0, 2), v: [(a[0] - b[0]) / DT, (a[1] - b[1]) / DT], top: Math.max(6, ...e.f.slice(0, realEnd + 1).map(f => f[2])) });
+  }
+  const P = (e, f) => tr[e.id][Math.max(0, Math.min(f, tr[e.id].length - 1))];
+  const set = (e, f, fr) => { const s = st.get(e); s.v = [(fr[0] - s.p[0]) / DT, (fr[1] - s.p[1]) / DT]; s.p = [fr[0], fr[1]]; tr[e.id][f] = fr; };
+  const move = (e, f, tgt, top, amax) => { tr[e.id][f] = kin(st.get(e), tgt, top ?? st.get(e).top, amax); };
+  const coast = (e, f, k) => { const s = st.get(e), q = P(e, f - 1); s.v = [s.v[0] * k, s.v[1] * k]; s.p = clampF([s.p[0] + s.v[0] * DT, s.p[1] + s.v[1] * DT]); tr[e.id][f] = [s.p[0], s.p[1], Math.hypot(...s.v), q[3], q[4]]; };
+
+  const rt = {}; for (const e of off) if (edits[e.id]) rt[e.id] = routeTrack(e, edits[e.id], base(e, S), MAX);
   const routes = off.filter(e => e.role === 'Pass Route' || edits[e.id]);
-  const out = { pos: {}, mode };
+  const endA = Math.min(cur.E, realEnd), assign = {};
+  for (const d of def) { let best = null, bd = Infinity; for (const r of routes) { let s = 0; for (let f = S; f <= endA; f++) s += dist(d.f[f], r.f[f]); if (s < bd) { bd = s; best = r; } } assign[d.id] = best; }
 
-  for (const e of off) {
-    const pts = edits[e.id]; if (!pts) continue;
-    const track = e.f.slice(0, S + 1), top = Math.max(7, ...e.f.map(f => f[2]));
-    let p = e.f[S].slice(0, 2), v = e.f[S][2], i = 0;
-    for (let f = S + 1; f <= E; f++) {
-      v = Math.min(top, v + 5 * DT);
-      let stepLen = v * DT;
-      while (stepLen > 0 && i < pts.length) {
-        const d = dist(p, pts[i]);
-        if (d > stepLen) { p = [p[0] + (pts[i][0] - p[0]) * stepLen / d, p[1] + (pts[i][1] - p[1]) * stepLen / d]; stepLen = 0; }
-        else {
-          stepLen -= d; p = pts[i].slice(); i++;
-          if (i < pts.length) { const a = pts[i - 2] || e.f[S], prev = Math.atan2(p[0] - a[0], p[1] - a[1]), next = Math.atan2(pts[i][0] - p[0], pts[i][1] - p[1]);
-            let turn = Math.abs(next - prev); if (turn > Math.PI) turn = 2 * Math.PI - turn; v *= 1 - 0.55 * turn / Math.PI; }
+  // each defender's job
+  const job = {};
+  for (const d of def) {
+    const o = wi.assign[d.id], s0 = base(d, S), depth = Math.abs(s0[0] - los);
+    const landmark = [los + (depth > 9 ? Math.max(depth, 14) : 8), s0[1]];
+    let j;
+    if (o?.t === 'blitz') j = { t: 'rush' };
+    else if (o?.t === 'man') j = { t: 'man', r: byId(o.r) };
+    else if (o?.t === 'zone') j = { t: 'zone', p: o.p };
+    else if (d.role !== 'Coverage') j = { t: 'real' };
+    else if (!sameMode) j = mode === 'Man' ? { t: 'man', r: assign[d.id] } : { t: 'zone', p: landmark };
+    else if (wi.align[d.id] && mode === 'Man') j = { t: 'man', r: assign[d.id] };
+    else j = { t: 'react', r: assign[d.id] };
+    if (j.t === 'man' && !j.r) j = { t: 'zone', p: landmark };
+    if (j.r) { const rs = base(j.r, S); j.snapOff = [s0[0] - rs[0], s0[1] - rs[1]]; }
+    job[d.id] = j;
+  }
+  const blitzers = def.filter(d => job[d.id].t === 'rush');
+  let free = Math.max(0, def.filter(d => job[d.id].t === 'real' && d.role === 'Pass Rush').length + blitzers.length - off.filter(e => e.role === 'Pass Block').length);
+  blitzers.forEach(d => { job[d.id].free = free-- > 0; });
+  const changedOff = off.filter(e => edits[e.id] || wi.align[e.id]);
+  for (const d of def) { const j = job[d.id]; if (j.t !== 'react') continue;
+    j.influenced = mode === 'Man' ? !!(j.r && changedOff.includes(j.r))
+      : changedOff.some(r => { for (let f = S; f <= Math.min(T0, realEnd); f += 2) if (dist(rt[r.id]?.[f] ?? base(r, f), base(d, f)) < 10) return true; return false; });
+  }
+  const delta = (r, f) => { const g = Math.max(S, f), n = P(r, g), b = base(r, g); return [n[0] - b[0], n[1] - b[1]]; };
+  const target = (d, f) => {
+    const j = job[d.id], lf = f - LAG, t = f - S;
+    if (j.t === 'react') {
+      const b = base(d, f);
+      if (mode === 'Man') { if (!j.r) return b; const dl = delta(j.r, lf); return [b[0] + dl[0], b[1] + dl[1]]; }
+      let bw = 0, bd = [0, 0];
+      for (const r of routes) { const w = clamp01(1 - (dist(P(r, Math.max(S, lf)), b) - 3) / 7); if (w > bw) { bw = w; bd = delta(r, lf); } }
+      return [b[0] + bw * bd[0], b[1] + bw * bd[1]];
+    }
+    if (j.t === 'man') { const n = P(j.r, Math.max(S, lf)), c = Math.max(0.15, 1 - t / 20); return [n[0] + j.snapOff[0] * c, n[1] + j.snapOff[1] * c]; }
+    if (j.t === 'zone') {
+      const s0 = base(d, S), c = Math.min(1, t / 15), anchor = [s0[0] + (j.p[0] - s0[0]) * c, s0[1] + (j.p[1] - s0[1]) * c];
+      let near = null, nd = 7; for (const r of routes) { const q = P(r, Math.max(S, lf)), dd = dist(q, anchor); if (dd < nd) { nd = dd; near = q; } }
+      return near ? [anchor[0] + (near[0] - anchor[0]) * 0.8, anchor[1] + (near[1] - anchor[1]) * 0.8] : anchor;
+    }
+    if (j.t === 'rush') { const q = P(qb, f - 1); return j.free ? q : [los - 1.5, q[1] + (st.get(d).p[1] - q[1]) * 0.5]; }
+    return null; // real rusher after the tracking: squeeze the pocket
+  };
+  const stepDefense = f => { for (const d of def) {
+    const j = job[d.id];
+    if ((j.t === 'real' || (j.t === 'react' && !j.influenced)) && f <= realEnd) set(d, f, base(d, f));
+    else { const tg = target(d, f); tg ? move(d, f, tg, j.t === 'rush' ? undefined : st.get(d).top * 1.03) : move(d, f, P(qb, f - 1), 2.5); }
+  } };
+
+  // ---- snap → throw (or sack)
+  let T = T0, sackF = null, sacker = null;
+  for (let f = S + 1; f <= T0; f++) {
+    for (const e of off) { if (rt[e.id]) set(e, f, rt[e.id][f]); else if (f <= realEnd) set(e, f, base(e, f)); else coast(e, f, e.role === 'Pass Route' ? 0.97 : 0.8); }
+    stepDefense(f);
+    set(ball, f, f <= Math.min(realEnd, cur.E) ? base(ball, f) : P(qb, f).slice());
+    if (f > S + 5 && f < T0) {
+      const q = P(qb, f), hit = def.find(d => (job[d.id].t === 'rush' || (job[d.id].t === 'real' && f > cur.E)) && dist(P(d, f), q) < 1);
+      if (hit) { sackF = T = f; sacker = hit; break; }
+    }
+  }
+  const events = {};
+  for (const [fr, ev] of Object.entries(cur.events)) if (+fr <= Math.min(T, cur.E) && !END.includes(ev) && !/outcome|arrived|tipped|interrupted|forward/.test(ev)) events[fr] = ev;
+  let result, lastF = T;
+  const settle = (from, carrier) => { for (let k = 1; k <= 10; k++) { const f = from + k;
+    for (const e of people) coast(e, f, e === carrier || e === sacker ? 0.4 : 0.85);
+    carrier ? set(ball, f, P(carrier, f).slice()) : coast(ball, f, 0.6); } return from + 10; };
+
+  if (sackF) {
+    events[sackF] = 'qb_sack';
+    result = { kind: 'sack', by: sacker, yards: Math.round(P(qb, sackF)[0] - los) };
+    lastF = settle(sackF, qb);
+  } else {
+    events[T] = 'pass_forward';
+    const sepAt = r => Math.min(...def.map(d => dist(P(d, T), P(r, T))));
+    const tgtR = (wi.throwTo && byId(wi.throwTo)) || (routes.length ? routes.reduce((a, b) => sepAt(b) > sepAt(a) ? b : a) : off.find(canRoute));
+    const q0 = P(qb, T).slice(0, 2), sT = st.get(tgtR);
+    let F = 10, cp = P(tgtR, T).slice(0, 2);
+    for (let i = 0; i < 3; i++) {  // lead him: where will he be when the ball gets there?
+      cp = rt[tgtR.id] ? rt[tgtR.id][Math.min(T + F, MAX)].slice(0, 2) : clampF([P(tgtR, T)[0] + sT.v[0] * F / 10 * 0.8, P(tgtR, T)[1] + sT.v[1] * F / 10 * 0.8]);
+      F = Math.max(4, Math.round(dist(q0, cp) / 18 * 10));
+    }
+    const C = T + F, breakers = def.filter(d => dist(P(d, T), cp) < 9);
+    for (let f = T + 1; f <= C; f++) {
+      const c = (f - T) / F; set(ball, f, [q0[0] + (cp[0] - q0[0]) * c, q0[1] + (cp[1] - q0[1]) * c, 18, 0, 0]);
+      for (const e of off) {
+        if (e === tgtR) move(e, f, cp);
+        else if (rt[e.id]) set(e, f, rt[e.id][f]);
+        else if (f <= realEnd) set(e, f, base(e, f));
+        else coast(e, f, e.role === 'Pass Route' ? 0.97 : 0.8);
+      }
+      for (const d of def) {
+        if (breakers.includes(d) && f - T > 5) move(d, f, cp, st.get(d).top * 0.9);
+        else { const tg = target(d, f); tg ? move(d, f, tg) : move(d, f, P(qb, f - 1), 2.5); }
+      }
+    }
+    const rd = dist(P(tgtR, C), cp), near = def.map(d => [d, dist(P(d, C), cp)]).sort((a, b) => a[1] - b[1])[0] || [null, 99];
+    // thresholds fitted on ~400 real targets (6 games); on 4 held-out games: 72.5% right on catch vs no catch (always "catch" = 69%)
+    const sepT = sepAt(tgtR);
+    const kind = rd > 1.5 ? 'inc' : near[1] < 0.4 && near[1] < rd && sepT < 1.5 ? 'int' : sepT >= 1.5 || near[1] >= 2 ? 'catch' : 'pbu';
+    events[C] = kind === 'catch' ? 'pass_outcome_caught' : kind === 'int' ? 'pass_outcome_interception' : 'pass_outcome_incomplete';
+    const carrier = kind === 'catch' ? tgtR : kind === 'int' ? near[0] : null;
+    let endF = C, tackler = null, td = false;
+    if (carrier) {
+      const dirx = carrier.off ? 1 : -1, chasers = carrier.off ? def : off;
+      let endEv = 'tackle';
+      for (let f = C + 1; f <= C + 60; f++) {
+        const cs = st.get(carrier), nc = chasers.reduce((a, b) => dist(P(b, f - 1), cs.p) < dist(P(a, f - 1), cs.p) ? b : a);
+        const away = Math.sign(cs.p[1] - P(nc, f - 1)[1]) || 1;
+        move(carrier, f, [cs.p[0] + dirx * 8, Math.max(1, Math.min(W - 1, cs.p[1] + away * 2))], cs.top * 0.95);
+        set(ball, f, P(carrier, f).slice());
+        for (const e of people) if (e !== carrier) {
+          if (chasers.includes(e)) { const c = st.get(carrier); move(e, f, [c.p[0] + c.v[0] * 0.4, c.p[1] + c.v[1] * 0.4]); }
+          else coast(e, f, 0.9);
         }
+        endF = f;
+        const cp2 = P(carrier, f);
+        if (carrier.off ? cp2[0] >= 110 : cp2[0] <= 10) { endEv = 'touchdown'; td = true; break; }
+        if (cp2[1] < 0.6 || cp2[1] > W - 0.6) { endEv = 'out_of_bounds'; break; }
+        tackler = chasers.find(e => dist(P(e, f), cp2) < 1); if (tackler) break;
       }
-      if (i >= pts.length) v = Math.max(0, v - 8 * DT);
-      const q = track[f - 1], h = (Math.atan2(p[0] - q[0], p[1] - q[1]) * 180 / Math.PI + 360) % 360;
-      track[f] = [p[0], p[1], v, h, h];
+      events[endF] = endEv;
     }
-    out.pos[e.id] = track;
+    const spot = carrier ? P(carrier, endF).slice(0, 2) : null;
+    result = { kind, target: tgtR, by: near[0], carrier, tackler, td, spot, diag: { near: near[1], rd, sepT },
+      yards: carrier ? Math.round(carrier.off ? Math.min(110, spot[0]) - los : spot[0] - cp[0]) : 0 };
+    lastF = settle(endF, carrier);
   }
-  const R = (e, f) => (out.pos[e.id] || e.f)[Math.max(S, f)];
-
-  const assign = {};
-  for (const d of cover) {
-    let best = null, bestD = Infinity;
-    for (const r of routes) { let s = 0; for (let f = S; f <= E; f++) s += dist(d.f[f], r.f[f]); if (s < bestD) { bestD = s; best = r; } }
-    assign[d.id] = best;
-  }
-  const editedEnts = Object.keys(edits).map(id => cur.ents.find(e => e.id === id));
-
-  for (const d of cover) {
-    const a = assign[d.id]; if (!a) continue;
-    const sameMode = mode === played || (played !== 'Man' && played !== 'Zone');
-    if (sameMode && mode === 'Man' && !edits[a.id]) continue;
-    if (sameMode && mode !== 'Man' && !editedEnts.some(r => { for (let f = S; f <= E; f++) if (dist(R(r, f), d.f[f]) < 10) return true; })) continue;
-    const top = Math.max(6, ...d.f.map(f => f[2])) * 1.03;
-    const snapOff = [d.f[S][0] - a.f[S][0], d.f[S][1] - a.f[S][1]], snapDepth = Math.abs(d.f[S][0] - los);
-    const land = [los + (snapDepth > 9 ? Math.max(snapDepth, 14) : 8), d.f[S][1]];
-    const track = d.f.slice(0, S + 1), p0 = d.f[Math.max(0, S - 1)];
-    const st = { p: d.f[S].slice(0, 2), v: [(d.f[S][0] - p0[0]) / DT, (d.f[S][1] - p0[1]) / DT] };
-    for (let f = S + 1; f <= E; f++) {
-      const t = f - S, lf = f - LAG;
-      let tgt;
-      if (sameMode && mode === 'Man') { const n = R(a, lf), o = a.f[Math.max(S, lf)]; tgt = [d.f[f][0] + n[0] - o[0], d.f[f][1] + n[1] - o[1]]; }
-      else if (sameMode) {
-        tgt = d.f[f].slice(0, 2);
-        for (const r of editedEnts) { const n = R(r, lf), o = r.f[Math.max(S, lf)], w = Math.max(0, Math.min(1, 1 - (dist(n, d.f[f]) - 3) / 7));
-          tgt = [tgt[0] + w * (n[0] - o[0]), tgt[1] + w * (n[1] - o[1])]; }
-      } else if (mode === 'Man') { const n = R(a, lf), c = Math.max(0.15, 1 - t / 20); tgt = [n[0] + snapOff[0] * c, n[1] + snapOff[1] * c]; }
-      else {
-        const c = Math.min(1, t / 15), anchor = [d.f[S][0] + (land[0] - d.f[S][0]) * c, d.f[S][1] + (land[1] - d.f[S][1]) * c];
-        let near = null, nd = 7; for (const r of routes) { const q = R(r, lf), dd = dist(q, anchor); if (dd < nd) { nd = dd; near = q; } }
-        tgt = near ? [anchor[0] + (near[0] - anchor[0]) * 0.8, anchor[1] + (near[1] - anchor[1]) * 0.8] : anchor;
-      }
-      track[f] = kin(st, tgt, top);
-    }
-    out.pos[d.id] = track;
-  }
-  return out;
+  const changed = new Set(people.filter(e => { for (let f = 0; f <= Math.min(T, realEnd); f++) if (dist(tr[e.id][f], e.f[f]) > 0.3) return true; return false; }).map(e => e.id));
+  return { pos: tr, mode, T, end: lastF, events, result, changed };
 }
 // one 0.1s step toward a target: arrive smoothly, capped by top speed and acceleration. Mutates st {p, v}.
 function kin(st, tgt, top, amax = AMAX) {

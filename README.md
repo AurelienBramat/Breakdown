@@ -36,7 +36,7 @@ A browser app that does three things:
 
 1. **Replay:** a clean 2D replay of any play with broadcast-style context (score, down and distance, clock), a camera that follows the action, and coach overlays (route chart, live "who's open" separation, pressure and blocking breakdown). Each play runs from the line-up through the throw, catch, run after the catch and tackle, with a click-to-jump "play story" timeline.
 2. **Scouting:** each defense's tendencies, computed from real snaps. For example: "Dallas plays man 45% of the time on 3rd down, blitzes on 26% of snaps, and Cover-1 is its favourite call."
-3. **What-if simulation:** change the play (tap a route from the route tree, or draw one) and choose the defensive call ("as called", "their usual", man, zone). The simulation replays the snap instantly. It shows how every defender adjusts and which receiver would have been the QB's best read.
+3. **What-if simulation:** coaches can change almost anything about the play. Give any receiver a new route (route tree, or draw one and drag its points), move any player's pre-snap alignment, send any defender on a blitz, put him in man on a receiver you pick or drop him into a zone spot you click, switch the coverage call, and choose when the QB throws and to whom. The play re-simulates instantly through to the outcome (sack, catch, breakup or interception, then the run after the catch), and every scenario can be undone or saved.
 
 ### Why it's different
 - **Interactive, not passive:** the what-if engine is the core feature. Most analytics tools describe a play; this one lets you rerun it with changes.
@@ -78,7 +78,7 @@ A working prototype covering 122 games and 8,557 pass plays, with replay, scouti
 | **Centre: field** | Auto-zoom camera, with the offense always attacking left → right. Hover a player for his name; click him for details. Toggles: Names, Route chart, Who's open (green ≥ 3 yds, yellow 1.5–3, red < 1.5), Trails, Full field. After the throw, the rest of the play is reconstructed (labelled on screen) and the real result spot is marked with ✕. |
 | **Controls** | Play/pause, previous/next play, jump to Snap or Throw, a timeline with clickable events, and 0.25×–2× speed (0.5× by default). |
 | **Right: Play tab** | Game situation (who leads, time left, red zone), a **play story** timeline (line-up → motion / play action → snap → pressure → throw → catch → tackle, plus penalty flags; click a step to jump there), the plays before and after, then formation, personnel, coverage, dropback, rushers or blitz, time to throw, who pressured the QB, beaten blocks, and the selected player's card. |
-| **Right: What-if tab** | 1) Pick a player 2) pick a route (or draw one) and its depth 3) pick the defense call. It re-simulates instantly. An **Original / What-if** switch sits on the field, and a results card under the field shows the best read and each receiver's real vs simulated separation. |
+| **Right: What-if tab** | 1) Pick any player (chips or click the field). 2) Offense: a route from the route tree (15 routes, short/normal/deep) or draw your own, then drag the gold points to fine-tune. Defense: as played / blitz / man on a receiver / zone drop (click the spot). Drag any player at the snap to change his alignment. 3) Defense call. 4) Quarterback: throw time slider and throw target (or "best open"). 5) Scenario: a list of every change (✕ removes one), Undo (also Ctrl+Z), Reset, and Save / load named scenarios (kept in your browser). A results card under the field shows the simulated outcome vs the real one, plus each receiver's separation. |
 | **Right: Defense tab** | The team's man/zone split (overall and on this down), average rushers, blitz rate, box count and coverage-call distribution. |
 
 **Keyboard:** `Space` play/pause · `←` `→` step a frame · `S` snap · `T` throw · `N` / `P` next/previous play.
@@ -148,36 +148,36 @@ Coordinates: the field is 120 × 53.3 yards, with end zones at x 0–10 and 110�
 
 ## How the what-if simulator works
 
-The code is in `simulate()` in [`app/index.html`](app/index.html). It simulates from the snap to the throw (or the sack).
+The code is in `simulate()` in [`app/index.html`](app/index.html). It steps the whole play frame by frame at 10 Hz, so every player can react to every other player.
 
-**1. Offense.** An edited player runs his new route from his real position at the snap:
-- He accelerates at 5 yd/s² up to his real top speed (at least 7 yd/s).
-- He loses speed at each cut, scaled by the sharpness of the turn (up to 55% for a full reversal).
-- He settles when the route ends.
+**1. Offense**
+- An edited player runs his new route from his (possibly moved) spot at the snap. He accelerates at 5 yd/s² up to his real top speed, loses speed at each cut (up to 55% for a full reversal) and settles when the route ends.
+- A moved player without a new route runs his real route, shifted to his new spot.
+- Everyone else keeps his exact real tracking, then coasts once the tracking runs out (needed when the QB holds the ball longer than he really did).
 
-Every player you didn't edit keeps his exact real tracking.
+**2. Defense:** each defender gets a job.
 
-**2. Assignments.** Each coverage defender is linked to the receiver he stayed closest to, on average, during the real play. In man coverage this matches his real assignment.
+| Job | When | Behaviour |
+|---|---|---|
+| React | Coverage defender, same call as played | Real track, shifted by how far "his" receiver moved off the real route (man), or by whichever receiver is in his area (zone, fading out from 3 to 10 yds); 0.3 s reaction delay. Defenders nobody's change affects keep their real track. |
+| Man | Forced man call, or the coach picks a receiver | Trails the receiver, closing the cushion he had at the snap over about 2 s |
+| Zone | Forced zone call (landmark: 8 yds underneath, 14+ deep), or the coach clicks a spot | Drops to the spot and breaks on the closest receiver within 7 yds |
+| Blitz | The coach sends him | Unblocked if rushers outnumber blockers (runs at the QB); otherwise picked up at the line |
+| Rush | Real pass rushers | Real rush; after the tracking ends they keep squeezing the pocket |
 
-**3. Defensive reaction**, depending on the call you choose:
+"Their usual" picks man or zone, whichever this defense plays more often on this down (from `/api/team`). Each defender is limited by his own real top speed, 7 yd/s² acceleration and the reaction delay (`LAG`, `AMAX`, `DT` constants, shared movement step `kin()`).
 
-| Call | Behaviour |
-|---|---|
-| Same as played, **man** | The defender keeps his real track, shifted by how far his receiver moved from the original route, with a 0.3 s reaction delay |
-| Same as played, **zone** | The defender keeps his real track, but breaks on an edited receiver who enters his area (full reaction within 3 yds, fading out by 10 yds) |
-| **Forced man** | He trails his assigned receiver, closing the cushion he had at the snap over about 2 s |
-| **Forced zone** | He drops to a landmark (8 yds for underneath defenders, 14+ yds for deep ones) and breaks on the closest receiver within 7 yds |
-| **Their usual** | Man or zone, whichever this defense plays more often on this down (from `/api/team`) |
+**3. Pressure.** A blitzer within 1 yd of the QB before the throw is a sack. So is a real rusher, if the QB now holds the ball longer than he really did.
 
-Only defenders whose situation actually changed are re-simulated. Everyone else stays on real data.
+**4. Throw and outcome.** The ball goes to the coach's target, or to the most open receiver. It is led to where he will be (along his drawn route if he has one) at about 18 yd/s. Defenders near the spot break on the ball after 0.5 s. Then:
+- the receiver is 1.5+ yds from the spot → incomplete (he can't get there)
+- a defender beats him to the spot within 0.4 yd, and he was covered at the throw → interception
+- he was 1.5+ yds open at the throw, or no defender is within 2 yds → catch
+- otherwise → broken up
 
-**4. Physics limits.** Each defender is capped at 103% of his own real top speed, 7 yd/s² acceleration and a 0.3 s reaction delay (`LAG`, `AMAX`, `DT` constants).
+After a catch (or interception) the carrier runs upfield, away from the nearest chaser, until a defender gets within 1 yd, he steps out of bounds, or he scores.
 
-**5. Output.** Each receiver's separation from the nearest defender at the throw, simulated vs real, and the "best read" (the most open receiver).
-
-The reaction rules are hand-tuned heuristics that produce plausible results. They are not a trained model. Replacing them with a model learned from the tracking frames is the top roadmap item.
-
----
+**How good is it?** The outcome thresholds were fitted on ~400 real throws. On 4 games it was not tuned on (233 throws), it calls catch vs no catch right **72.5%** of the time (always guessing "catch" gets 69%). The yards on correctly predicted catches are within 3 yds of the real gain at the median (6 yds at the 75th percentile). It can't tell *which* passes were really intercepted. These are hand-tuned heuristics: use them to compare scenarios, not to predict exact results. Replacing them with a model trained on the tracking data is the top roadmap item.
 
 ## API reference
 
@@ -209,7 +209,8 @@ Where to change things in `index.html`:
 - Field drawing and overlays: `drawField()`, `draw()`
 - Camera: `computeView()`
 - Route tree: the `ROUTES` constant (each waypoint is `[downfield yds, outside yds]`)
-- Simulation: `simulate()` and its constants `LAG`, `DT`, `AMAX`; shared movement physics: `kin()`
+- Simulation: `simulate()` (defender jobs, sack check, throw outcome thresholds) and its constants `LAG`, `DT`, `AMAX`; shared movement physics: `kin()`; drawn routes: `routeTrack()`
+- What-if panel and scenario state (undo, save/load): `renderWhatIf()`, `change()`, `undo()`, `snapWi()`
 - Post-throw reconstruction: `reconstruct()` (description parsing: `findPlayer()`, `spotX()`, the `NAME` regex)
 - Play story timeline: `playStory()`
 - Play filters: the `FILTERS` object
@@ -220,15 +221,15 @@ Where to change things in `index.html`:
 
 - **Pass plays only, 2021 weeks 1–8:** this is the scope of the Big Data Bowl dataset. There are no run plays and no special teams.
 - **Tracking covers only about 0.7 s before the snap to 0.5 s after the throw or sack**, because the dataset was built to study pass rushing. The rest of each play (ball flight, catch or incompletion or interception, run after the catch, tackle) is reconstructed in `reconstruct()` from the play-by-play text: the target, tackler, interceptor and the official yardage and spots. The end result is real; the path to it is approximate, and it is labelled "reconstructed" on screen.
-- **The what-if simulation ends at the throw.** It doesn't predict catch probability or yards after catch, and the ball isn't redirected to a new route.
+- **What-if outcomes are heuristic.** See "How good is it?" above. Linemen keep their real blocks; they don't re-target a new blitzer.
 - **Heuristic defense:** the rules above are plausible, not validated. Pass rushers and blockers aren't re-simulated.
 - **Single process and in-memory cache.** That's fine for a demo, but not multi-tenant.
 
 ## Roadmap
 
 1. **Learned defense model:** train a model on every tracking frame to predict each defender's next movement, given the receivers and the coverage (SageMaker).
-2. **Catch probability and expected yards** at the throw, so a what-if reports "+0.4 expected yards" instead of only separation.
-3. **Defensive what-ifs:** add a blitzer, rotate a safety, switch a corner's leverage.
+2. **Probabilistic outcomes:** catch probability and expected yards instead of one deterministic result, plus the chance of a sack.
+3. **Smarter blocking:** linemen and backs pick up blitzers instead of keeping their real blocks.
 4. **AI play breakdowns:** a plain-language explanation of any play or what-if (Amazon Bedrock).
 5. **Shareable links and clips** for a play or a what-if scenario.
 6. **More data:** full seasons, run plays, and teams' own tracking data.
