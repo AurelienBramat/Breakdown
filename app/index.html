@@ -239,7 +239,11 @@ async function loadPlay(id) {
   if (seq !== loadSeq) return;
   const flip = data.dir === 'left';
   for (const e of data.ents) {
-    for (let f = 0; f < data.nFrames; f++) e.f[f] ||= e.f[f - 1] || e.f.find(Boolean);
+    for (let f = 0; f < data.nFrames; f++) if (!e.f[f]) { // fill tracking gaps by interpolating, not freeze-then-jump
+      let n = f + 1; while (n < data.nFrames && !e.f[n]) n++;
+      const a = e.f[f - 1], b = e.f[n];
+      e.f[f] = a && b ? a.map((v, i) => v + (b[i] - v) / (n - f + 1)) : (a || b || e.f.find(Boolean)).slice();
+    }
     if (flip) e.f = e.f.map(p => [120 - p[0], W - p[1], p[2], (p[3] + 180) % 360, (p[4] + 180) % 360]);
     e.off = e.team === data.play.possessionTeam;
   }
@@ -249,7 +253,7 @@ async function loadPlay(id) {
   cur.S = ev.find(([, e]) => SNAP.includes(e))?.[0] ?? 0;
   cur.E = ev.find(([f, e]) => f > cur.S && END.includes(e))?.[0] ?? cur.nFrames - 1;
   cur.endEvent = cur.events[cur.E] || 'end';
-  cur.realEnd = cur.nFrames - 1; cur.recon = null; reconstruct();
+  cur.realEnd = cur.nFrames - 1; cur.recon = null; reconstruct(); smoothBall(cur.ents.find(e => e.id === 'ball')?.f);
   sel = hover = null; resetWi(); hist.length = 0; sim = null; viewSim = false;
   frame = 0; playing = true;
   computeView(); renderList(); renderBoard(); renderPlayTab(); renderDefenseTab(); renderWhatIf(); renderMarks(); updateModeBadge(); draw();
@@ -977,11 +981,15 @@ function simulate() {
   } };
 
   // ---- snap → throw (or sack)
-  let T = T0, sackF = null, sacker = null;
+  let T = T0, sackF = null, sacker = null, handOff = null, handF = 0;
   for (let f = S + 1; f <= T0; f++) {
     for (const e of off) { if (rt[e.id]) set(e, f, rt[e.id][f]); else if (f <= realEnd) set(e, f, base(e, f)); else coast(e, f, e.role === 'Pass Route' ? 0.97 : 0.8); }
     stepDefense(f);
-    set(ball, f, f <= Math.min(realEnd, cur.E) ? base(ball, f) : P(qb, f).slice());
+    if (f <= Math.min(realEnd, cur.E)) set(ball, f, base(ball, f));
+    else { // QB keeps holding it: follow him from where the ball really was in his hand
+      if (!handOff) { const a = P(ball, f - 1), q1 = P(qb, f - 1); handOff = [a[0] - q1[0], a[1] - q1[1]]; handF = f - 1; }
+      const q = P(qb, f), dk = Math.pow(0.8, f - handF); set(ball, f, [q[0] + handOff[0] * dk, q[1] + handOff[1] * dk, 0, 0, 0]);
+    }
     if (f > S + 5 && f < T0) {
       const q = P(qb, f), hit = def.find(d => (job[d.id].t === 'rush' || (job[d.id].t === 'real' && f > cur.E)) && dist(P(d, f), q) < 1);
       if (hit) { sackF = T = f; sacker = hit; break; }
@@ -1002,7 +1010,7 @@ function simulate() {
     events[T] = 'pass_forward';
     const sepAt = r => Math.min(...def.map(d => dist(P(d, T), P(r, T))));
     const tgtR = (wi.throwTo && byId(wi.throwTo)) || (routes.length ? routes.reduce((a, b) => sepAt(b) > sepAt(a) ? b : a) : off.find(canRoute));
-    const q0 = P(qb, T).slice(0, 2), sT = st.get(tgtR);
+    const q0 = P(ball, T).slice(0, 2), sT = st.get(tgtR);
     let F = 10, cp = P(tgtR, T).slice(0, 2);
     for (let i = 0; i < 3; i++) {  // lead him: where will he be when the ball gets there?
       cp = rt[tgtR.id] ? rt[tgtR.id][Math.min(T + F, MAX)].slice(0, 2) : clampF([P(tgtR, T)[0] + sT.v[0] * F / 10 * 0.8, P(tgtR, T)[1] + sT.v[1] * F / 10 * 0.8]);
@@ -1010,7 +1018,6 @@ function simulate() {
     }
     const C = T + F, breakers = def.filter(d => dist(P(d, T), cp) < 9);
     for (let f = T + 1; f <= C; f++) {
-      const c = (f - T) / F; set(ball, f, [q0[0] + (cp[0] - q0[0]) * c, q0[1] + (cp[1] - q0[1]) * c, 18, 0, 0]);
       for (const e of off) {
         if (e === tgtR) move(e, f, cp);
         else if (rt[e.id]) set(e, f, rt[e.id][f]);
@@ -1028,6 +1035,7 @@ function simulate() {
     const kind = rd > 1.5 ? 'inc' : near[1] < 0.4 && near[1] < rd && sepT < 1.5 ? 'int' : sepT >= 1.5 || near[1] >= 2 ? 'catch' : 'pbu';
     events[C] = kind === 'catch' ? 'pass_outcome_caught' : kind === 'int' ? 'pass_outcome_interception' : 'pass_outcome_incomplete';
     const carrier = kind === 'catch' ? tgtR : kind === 'int' ? near[0] : null;
+    for (let f = T + 1; f <= C; f++) set(ball, f, [...flightPos(q0, cp, (f - T) / F, carrier && P(carrier, f)), 18, 0, 0]);
     let endF = C, tackler = null, td = false;
     if (carrier) {
       const dirx = carrier.off ? 1 : -1, chasers = carrier.off ? def : off;
@@ -1055,7 +1063,24 @@ function simulate() {
     lastF = settle(endF, carrier);
   }
   const changed = new Set(people.filter(e => { for (let f = 0; f <= Math.min(T, realEnd); f++) if (dist(tr[e.id][f], e.f[f]) > 0.3) return true; return false; }).map(e => e.id));
+  smoothBall(tr.ball, S);
   return { pos: tr, mode, T, end: lastF, events, result, changed };
+}
+const smooth01 = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+// ball in the air: straight at the catch point, then curving into the catcher's hands over the last 40% of the flight
+function flightPos(a, b, c, hands) {
+  const q = [a[0] + (b[0] - a[0]) * c, a[1] + (b[1] - a[1]) * c]; if (!hands) return q;
+  const w = smooth01((c - 0.6) / 0.4); return [q[0] + (hands[0] - q[0]) * w, q[1] + (hands[1] - q[1]) * w];
+}
+// zero-lag 5-frame smoothing of the ball's path: irons out tracking glitches and hand-offs without delaying it
+function smoothBall(t, from = 0) {
+  if (!t) return;
+  const w = [1, 2, 3, 2, 1], src = t.map(p => p.slice());
+  for (let f = Math.max(0, from); f < t.length; f++) {
+    let x = 0, y = 0, n = 0;
+    for (let j = -2; j <= 2; j++) { const q = src[Math.max(from, Math.min(src.length - 1, f + j))]; x += q[0] * w[j + 2]; y += q[1] * w[j + 2]; n += w[j + 2]; }
+    t[f] = [x / n, y / n, t[f][2], t[f][3], t[f][4]];
+  }
 }
 // one 0.1s step toward a target: arrive smoothly, capped by top speed and acceleration. Mutates st {p, v}.
 function kin(st, tgt, top, amax = AMAX) {
@@ -1125,7 +1150,7 @@ function reconstruct() {
     if (phase === 'hold' && n0 + f - (endFrame ?? n0) >= 10) break;
     // ball
     const bs = st.get(ball), setBall = q => { bs.v = [(q[0] - bs.p[0]) / DT, (q[1] - bs.p[1]) / DT]; bs.p = q; push(ball, [q[0], q[1], Math.hypot(...bs.v), 0, 0]); };
-    if (phase === 'flight') { const c = (f + 1) / flight; setBall([b0[0] + (catchPt[0] - b0[0]) * c, b0[1] + (catchPt[1] - b0[1]) * c]); }
+    if (phase === 'flight') setBall(flightPos(b0, catchPt, (f + 1) / flight, carrier && endPt ? st.get(carrier).p : null));
     else if (carrier && endPt) setBall(st.get(carrier).p.slice());
     else push(ball, coast(ball, 0.6));
     // players
