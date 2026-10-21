@@ -470,7 +470,25 @@ function drawScene() {
     }
   }
   const b = cur.ents.find(e => e.id === 'ball');
-  if (b) { const [x, y] = px(...pos(b, frame)); ctx.fillStyle = '#8b4a1c'; ctx.strokeStyle = '#fff'; ctx.lineWidth = DPR; ctx.beginPath(); ctx.ellipse(x, y, 6 * DPR, 4 * DPR, 0, 0, 7); ctx.fill(); ctx.stroke(); }
+  if (b) drawBall(b);
+}
+// the ball: big, haloed, pointing where it travels, with a fading trail so passes are easy to follow
+function drawBall(b) {
+  const [x, y] = px(...pos(b, frame)), L = Math.max(9 * DPR, 0.75 * k());
+  for (let f = Math.max(0, frame - 8); f < frame; f++) { // trail
+    const [tx, ty] = px(...pos(b, f)), a = (f - frame + 9) / 9;
+    if (Math.hypot(tx - x, ty - y) < L * 0.6) continue;
+    ctx.fillStyle = `rgba(255,214,0,${0.55 * a})`; ctx.beginPath(); ctx.arc(tx, ty, L * 0.35 * a + DPR, 0, 7); ctx.fill();
+  }
+  const p0 = px(...pos(b, Math.max(0, frame - 1))), ang = Math.hypot(x - p0[0], y - p0[1]) > 0.5 ? Math.atan2(y - p0[1], x - p0[0]) : 0;
+  ctx.fillStyle = 'rgba(255,214,0,.35)'; ctx.beginPath(); ctx.arc(x, y, L * 1.9, 0, 7); ctx.fill(); // halo
+  ctx.strokeStyle = '#ffd600'; ctx.lineWidth = 2.5 * DPR; ctx.stroke();
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+  ctx.fillStyle = '#a0522d'; ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5 * DPR;
+  ctx.beginPath(); ctx.ellipse(0, 0, L, L * 0.6, 0, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * DPR; ctx.beginPath(); ctx.moveTo(-L * 0.4, 0); ctx.lineTo(L * 0.4, 0); // laces
+  for (let i = -1; i <= 1; i++) { ctx.moveTo(i * L * 0.2, -L * 0.15); ctx.lineTo(i * L * 0.2, L * 0.15); }
+  ctx.stroke(); ctx.restore();
   if (frame === throwFrame() && frame > cur.S) {
     ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillRect(cv.width / 2 - 90 * DPR, 10 * DPR, 180 * DPR, 26 * DPR);
     ctx.fillStyle = '#f5b82e'; ctx.font = `bold ${13 * DPR}px system-ui`; ctx.textAlign = 'center';
