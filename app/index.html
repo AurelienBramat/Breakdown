@@ -85,6 +85,8 @@
   .verdict { font-size:11px; font-weight:700; padding:1px 7px; border-radius:10px; }
   .verdict.open { background:var(--good); color:#06180e; } .verdict.tight { background:var(--warn); color:#111; } .verdict.covered { background:var(--bad); color:#fff; }
   .headline { font-size:15px; font-weight:600; }
+  .story { display:grid; grid-template-columns:44px 1fr; gap:8px; padding:4px 6px; border-radius:6px; cursor:pointer; }
+  .story:hover { background:#24323c; } .story span:first-child { font-variant-numeric:tabular-nums; }
 </style>
 </head>
 <body>
@@ -98,6 +100,7 @@
   <div id="filters">
     <input id="search" type="search" placeholder="Search player, route, coverage…">
     <div class="chips" id="chips"></div>
+    <div class="chips" id="qChips"></div>
     <div class="chips" id="offChips"></div>
     <span id="count" class="muted"></span>
   </div>
@@ -149,8 +152,8 @@ const SNAP = ['ball_snap', 'autoevent_ballsnap'], END = ['pass_forward', 'autoev
 const ORD = ['', 'st', 'nd', 'rd', 'th'];
 const OL = ['T', 'G', 'C'];
 
-let games = [], plays = [], shown = [], cur = null, frame = 0, playing = false, lastTick = 0, speed = 1;
-let sel = null, hover = null, view = null, filter = 'All', offFilter = 'All', tab = 'play';
+let games = [], plays = [], shown = [], cur = null, frame = 0, playing = false, lastTick = 0, speed = 0.5;
+let sel = null, hover = null, view = null, filter = 'All', offFilter = 'All', qFilter = 0, tab = 'play';
 const show = { names: false, routes: true, sep: true, trails: false, full: false };
 const wi = { target: null, edits: {}, drawing: false, cov: 'played', depth: 1, route: {} };
 let sim = null, viewSim = false;
@@ -182,12 +185,15 @@ const FILTERS = {
 };
 $('#chips').innerHTML = Object.keys(FILTERS).map(k => `<button data-f="${k}" class="${k === filter ? 'on' : ''}">${k}</button>`).join('');
 $('#chips').onclick = e => { if (e.target.dataset.f) { filter = e.target.dataset.f; $$('#chips button').forEach(b => b.classList.toggle('on', b === e.target)); renderList(); } };
+$('#qChips').onclick = e => { const b = e.target.closest('[data-q]'); if (b) { qFilter = +b.dataset.q; $$('#qChips button').forEach(x => x.classList.toggle('on', x === b)); renderList(); } };
 $('#offChips').onclick = e => { if (e.target.dataset.f) { offFilter = e.target.dataset.f; $$('#offChips button').forEach(b => b.classList.toggle('on', b === e.target)); renderList(); } };
 
 async function loadGame() {
   plays = (await api('/api/plays?game=' + $('#game').value)).sort((a, b) => a.quarter - b.quarter || b.gameClock.localeCompare(a.gameClock) || a.playId - b.playId);
   const g = games.find(g => g.gameId == $('#game').value);
-  offFilter = 'All';
+  offFilter = 'All'; qFilter = 0;
+  const qs = [...new Set(plays.map(p => p.quarter))].sort();
+  $('#qChips').innerHTML = [0, ...qs].map(q => `<button data-q="${q}" class="${q === 0 ? 'on' : ''}">${q === 0 ? 'All quarters' : q === 5 ? 'OT' : 'Q' + q}</button>`).join('');
   $('#offChips').innerHTML = ['All', g.visitorTeamAbbr, g.homeTeamAbbr].map(t => `<button data-f="${t}" class="${t === 'All' ? 'on' : ''}">${t === 'All' ? 'Both offenses' : t + ' offense'}</button>`).join('');
   renderList();
   if (shown[0]) loadPlay(shown[0].playId);
@@ -202,7 +208,7 @@ function badge(p) {
 }
 function renderList() {
   const q = $('#search').value.toLowerCase();
-  shown = plays.filter(p => FILTERS[filter](p) && (offFilter === 'All' || p.possessionTeam === offFilter) && (!q || JSON.stringify(p).toLowerCase().includes(q)));
+  shown = plays.filter(p => FILTERS[filter](p) && (!qFilter || p.quarter === qFilter) && (offFilter === 'All' || p.possessionTeam === offFilter) && (!q || JSON.stringify(p).toLowerCase().includes(q)));
   $('#count').textContent = `${shown.length} of ${plays.length} pass plays`;
   $('#plays').innerHTML = shown.map(p => `<div class="play ${cur?.play.playId === p.playId ? 'sel' : ''}" data-id="${p.playId}">
     <span class="meta">Q${p.quarter} ${p.gameClock} · ${p.down}${ORD[p.down]} & ${p.yardsToGo} · ${p.possessionTeam}</span>${badge(p)}
@@ -211,9 +217,14 @@ function renderList() {
 $('#plays').onclick = e => { const d = e.target.closest('.play'); if (d) loadPlay(+d.dataset.id); };
 
 // ================= load + normalise a play (offense always attacks left → right) =================
+let loadSeq = 0;
 async function loadPlay(id) {
-  const data = await api(`/api/play?game=${$('#game').value}&play=${id}`);
-  if (!data) return;
+  const seq = ++loadSeq, game = $('#game').value;
+  const p = plays.find(p => p.playId === id);
+  const [data, tend] = await Promise.all([api(`/api/play?game=${game}&play=${id}`), p ? api('/api/team?t=' + p.defensiveTeam) : null]);
+  if (!data || seq !== loadSeq) return; // a newer click won
+  data.tend = tend || await api('/api/team?t=' + data.play.defensiveTeam);
+  if (seq !== loadSeq) return;
   const flip = data.dir === 'left';
   for (const e of data.ents) {
     for (let f = 0; f < data.nFrames; f++) e.f[f] ||= e.f[f - 1] || e.f.find(Boolean);
@@ -226,7 +237,7 @@ async function loadPlay(id) {
   cur.S = ev.find(([, e]) => SNAP.includes(e))?.[0] ?? 0;
   cur.E = ev.find(([f, e]) => f > cur.S && END.includes(e))?.[0] ?? cur.nFrames - 1;
   cur.endEvent = cur.events[cur.E] || 'end';
-  cur.tend = await api('/api/team?t=' + cur.play.defensiveTeam);
+  cur.realEnd = cur.nFrames - 1; cur.recon = null; reconstruct();
   sel = hover = null; wi.target = null; wi.edits = {}; wi.route = {}; wi.drawing = false; wi.cov = 'played'; sim = null; viewSim = false;
   frame = 0; playing = true;
   computeView(); renderList(); renderBoard(); renderPlayTab(); renderDefenseTab(); renderWhatIf(); renderMarks(); updateModeBadge(); draw();
@@ -251,7 +262,15 @@ function renderPlayTab() {
   const beaten = cur.ents.filter(e => e.beaten).map(e => `#${e.jersey} ${e.name}`);
   const rushers = cur.ents.filter(e => e.role === 'Pass Rush').length;
   const tt = ((cur.E - cur.S) / 10).toFixed(1);
+  const g = games.find(g => g.gameId === p.gameId), home = g.homeTeamAbbr === p.possessionTeam;
+  const os = home ? p.preSnapHomeScore : p.preSnapVisitorScore, ds = home ? p.preSnapVisitorScore : p.preSnapHomeScore;
+  const i = plays.findIndex(x => x.playId === p.playId), prev = plays[i - 1], next = plays[i + 1];
+  const link = (x, label) => x ? `<div class="story" data-play="${x.playId}"><span class="muted">${label}</span><span>Q${x.quarter} ${x.gameClock} · ${x.possessionTeam} ${x.down}${ORD[x.down]} & ${x.yardsToGo} · ${x.playDescription.replace(/^\(\d+:\d+\)\s*(\([^)]*\)\s*)*/, '').slice(0, 70)}…</span></div>` : '';
   $('#tab-play').innerHTML = `<div class="desc">${p.playDescription}</div>
+    <div class="card"><b>${os === ds ? `Tied ${os}–${ds}` : `${p.possessionTeam} ${os > ds ? 'leads' : 'trails'} ${os}–${ds}`}</b>
+      <span class="muted"> · Q${p.quarter === 5 ? 'OT' : p.quarter}, ${p.gameClock} left · ${p.down}${ORD[p.down]} & ${p.yardsToGo}${p.yardlineSide !== p.possessionTeam && p.yardlineNumber <= 20 ? ' · red zone' : ''}</span>
+      <h3>Play story <span style="text-transform:none;letter-spacing:0">(click a step to jump there)</span></h3>${playStory()}
+      <h3>Around this play (pass plays only)</h3>${link(prev, 'Before')}${link(next, 'After')}</div>
     <h3>Pre-snap</h3><div class="facts">
       <span>Formation</span><span>${p.offenseFormation || '-'} · ${p.personnelO || '-'}</span>
       <span>Defense</span><span>${p.personnelD || '-'} · ${p.defendersInBox ?? '-'} in the box</span>
@@ -265,6 +284,37 @@ function renderPlayTab() {
     <div id="pcard"></div>`;
   renderPlayerCard();
 }
+function playStory() {
+  const p = cur.play, d = p.playDescription, r = cur.recon || {}, yards = p.prePenaltyPlayResult ?? p.playResult ?? 0;
+  const nm = e => e ? `#${e.jersey} ${e.name}` : '';
+  const items = [[0, 'Line up', `${p.offenseFormation || ''} · ${p.personnelO || ''} vs ${p.personnelD || ''}`]];
+  for (const [f, e] of Object.entries(cur.events)) {
+    if (e === 'man_in_motion') items.push([+f, 'Motion', '']);
+    if (e === 'play_action') items.push([+f, 'Play-action fake', '']);
+  }
+  items.push([cur.S, 'Snap', `${cur.ents.filter(e => e.role === 'Pass Rush').length} rushers vs ${cur.ents.filter(e => e.role === 'Pass Block').length} blockers`]);
+  const pr = cur.ents.filter(e => e.hit || e.hurry || e.sack).map(e => `${nm(e)} (${e.sack ? 'sack' : e.hit ? 'hit' : 'hurry'})`);
+  if (/sack/.test(cur.endEvent)) items.push([cur.E, 'Sacked', pr.join(', ')]);
+  else if (p.passResult === 'R') items.push([cur.E, 'QB scrambles', nm(r.carrier)]);
+  else {
+    if (pr.length) items.push([cur.E - 1, 'Pressure', pr.join(', ')]);
+    const m = d.match(/pass (?:incomplete )?(short|deep) (left|middle|right)/);
+    items.push([cur.E, 'Throw', `${m ? m[1] + ' ' + m[2] : ''}${r.target ? ' to ' + nm(r.target) : ''}`]);
+  }
+  const label = { pass_outcome_caught: ['Catch', nm(r.carrier)], pass_outcome_incomplete: ['Incomplete', r.target ? 'intended for ' + nm(r.target) : ''],
+    pass_outcome_interception: ['Intercepted', 'by ' + nm(r.carrier)], tackle: ['Tackled', `${nm(r.tackler)} · ${yards > 0 ? '+' : ''}${yards} yds`],
+    touchdown: ['TOUCHDOWN', `${yards} yds`], out_of_bounds: ['Out of bounds', `${yards > 0 ? '+' : ''}${yards} yds`] };
+  for (const [f, e] of Object.entries(cur.events)) if (+f > cur.realEnd && label[e]) items.push([+f, ...label[e]]);
+  for (const k of [1, 2, 3]) if (p['foulName' + k]) { const e = cur.ents.find(e => e.id == p['foulNFLId' + k]); items.push([null, '🚩 ' + p['foulName' + k], e ? nm(e) : '']); }
+  return items.sort((a, b) => (a[0] ?? 1e9) - (b[0] ?? 1e9)).map(([f, t, s]) =>
+    `<div class="story" ${f != null ? `data-f="${f}"` : ''}><span class="muted">${f == null ? '' : (f < cur.S ? '−' : '+') + Math.abs((f - cur.S) / 10).toFixed(1) + 's'}${f > cur.realEnd ? '*' : ''}</span><span><b>${t}</b> ${s}</span></div>`).join('') +
+    (cur.recon ? '<p class="muted" style="margin:6px 0 0">* rebuilt from the play-by-play: the tracking data stops at the throw.</p>' : '');
+}
+$('#tab-play').onclick = e => {
+  const s = e.target.closest('.story'); if (!s) return;
+  if (s.dataset.play) { loadPlay(+s.dataset.play); return; }
+  if (s.dataset.f) { seek(+s.dataset.f); if (+s.dataset.f < maxFrame()) { playing = true; syncPlay(); } }
+};
 function renderPlayerCard() {
   const el = $('#pcard'); if (!el) return;
   const e = cur?.ents.find(e => e.id === sel);
@@ -376,7 +426,7 @@ function draw() {
     ctx.beginPath(); ctx.arc(...px(...e.f[frame]), R, 0, 7); ctx.stroke(); ctx.setLineDash([]);
   }
   // "who's open" rings around route runners after the snap
-  if (show.sep && frame >= cur.S) for (const e of players) if (e.off && (e.role === 'Pass Route' || (viewSim && sim?.pos[e.id]))) {
+  if (show.sep && frame >= cur.S && frame <= cur.realEnd) for (const e of players) if (e.off && (e.role === 'Pass Route' || (viewSim && sim?.pos[e.id]))) {
     const s = separation(e, frame), [x, y] = px(...pos(e, frame));
     ctx.strokeStyle = sepColor(s); ctx.lineWidth = 3 * DPR; ctx.beginPath(); ctx.arc(x, y, R + 4 * DPR, 0, 7); ctx.stroke();
     ctx.fillStyle = sepColor(s); ctx.font = `bold ${11 * DPR}px system-ui`; ctx.textAlign = 'center'; ctx.fillText(s.toFixed(1), x, y - R - 11 * DPR);
@@ -403,6 +453,16 @@ function draw() {
     ctx.fillStyle = '#f5b82e'; ctx.font = `bold ${13 * DPR}px system-ui`; ctx.textAlign = 'center';
     ctx.fillText(/sack/.test(cur.endEvent) ? 'SACK' : 'BALL THROWN', cv.width / 2, 23 * DPR);
   }
+  if (cur.recon && frame >= cur.recon.start) {
+    const rp = cur.recon.endPt;
+    if (rp) { const [x, y] = px(...rp); ctx.strokeStyle = '#f5b82e'; ctx.lineWidth = 3 * DPR; const r = 7 * DPR;
+      ctx.beginPath(); ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r); ctx.stroke();
+      line(rp[0], 'rgba(245,184,46,.5)', 1.5 * DPR); }
+    const msg = 'RECONSTRUCTED FROM PLAY-BY-PLAY · tracking ends at the throw';
+    ctx.font = `600 ${11 * DPR}px system-ui`; const w = ctx.measureText(msg).width;
+    ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(10 * DPR, cv.height - 30 * DPR, w + 20 * DPR, 22 * DPR);
+    ctx.fillStyle = '#f5b82e'; ctx.textAlign = 'left'; ctx.fillText(msg, 20 * DPR, cv.height - 19 * DPR);
+  }
   renderPlayerCard();
 }
 
@@ -423,7 +483,7 @@ function seek(f) { if (!cur) return; frame = Math.max(0, Math.min(maxFrame(), f)
 $('#play').onclick = togglePlay;
 $('#prev').onclick = () => step(-1); $('#next').onclick = () => step(1);
 $('#toSnap').onclick = () => seek(cur.S); $('#toThrow').onclick = () => seek(cur.E);
-$('#speeds').innerHTML = [0.25, 0.5, 1, 2].map(s => `<button data-s="${s}" class="${s === 1 ? 'on' : ''}">${s}×</button>`).join('');
+$('#speeds').innerHTML = [0.25, 0.5, 1, 2].map(s => `<button data-s="${s}" class="${s === speed ? 'on' : ''}">${s}×</button>`).join('');
 $('#speeds').onclick = e => { if (e.target.dataset.s) { speed = +e.target.dataset.s; $$('#speeds button').forEach(b => b.classList.toggle('on', b === e.target)); } };
 $$('.toggles button[data-o]').forEach(b => b.onclick = () => { show[b.dataset.o] = !show[b.dataset.o]; b.classList.toggle('on'); if (b.dataset.o === 'full') computeView(); draw(); });
 function tick(t) {
@@ -623,7 +683,7 @@ function simulate() {
     const snapOff = [d.f[S][0] - a.f[S][0], d.f[S][1] - a.f[S][1]], snapDepth = Math.abs(d.f[S][0] - los);
     const land = [los + (snapDepth > 9 ? Math.max(snapDepth, 14) : 8), d.f[S][1]];
     const track = d.f.slice(0, S + 1), p0 = d.f[Math.max(0, S - 1)];
-    let p = d.f[S].slice(0, 2), vel = [(d.f[S][0] - p0[0]) / DT, (d.f[S][1] - p0[1]) / DT];
+    const st = { p: d.f[S].slice(0, 2), v: [(d.f[S][0] - p0[0]) / DT, (d.f[S][1] - p0[1]) / DT] };
     for (let f = S + 1; f <= E; f++) {
       const t = f - S, lf = f - LAG;
       let tgt;
@@ -638,16 +698,103 @@ function simulate() {
         let near = null, nd = 7; for (const r of routes) { const q = R(r, lf), dd = dist(q, anchor); if (dd < nd) { nd = dd; near = q; } }
         tgt = near ? [anchor[0] + (near[0] - anchor[0]) * 0.8, anchor[1] + (near[1] - anchor[1]) * 0.8] : anchor;
       }
-      const dx = tgt[0] - p[0], dy = tgt[1] - p[1], dd = Math.hypot(dx, dy) || 1e-6;
-      const want = Math.min(top, dd / 0.3), dv = [dx / dd * want - vel[0], dy / dd * want - vel[1]], dm = Math.hypot(...dv);
-      if (dm > AMAX * DT) { dv[0] *= AMAX * DT / dm; dv[1] *= AMAX * DT / dm; }
-      vel = [vel[0] + dv[0], vel[1] + dv[1]]; p = [p[0] + vel[0] * DT, p[1] + vel[1] * DT];
-      const s = Math.hypot(...vel), h = (Math.atan2(vel[0], vel[1]) * 180 / Math.PI + 360) % 360;
-      track[f] = [p[0], p[1], s, h, h];
+      track[f] = kin(st, tgt, top);
     }
     out.pos[d.id] = track;
   }
   return out;
+}
+// one 0.1s step toward a target: arrive smoothly, capped by top speed and acceleration. Mutates st {p, v}.
+function kin(st, tgt, top, amax = AMAX) {
+  const dx = tgt[0] - st.p[0], dy = tgt[1] - st.p[1], dd = Math.hypot(dx, dy) || 1e-6;
+  const want = Math.min(top, dd / 0.3), dv = [dx / dd * want - st.v[0], dy / dd * want - st.v[1]], dm = Math.hypot(...dv);
+  if (dm > amax * DT) { dv[0] *= amax * DT / dm; dv[1] *= amax * DT / dm; }
+  st.v = [st.v[0] + dv[0], st.v[1] + dv[1]]; st.p = [st.p[0] + st.v[0] * DT, st.p[1] + st.v[1] * DT];
+  const s = Math.hypot(...st.v), h = (Math.atan2(st.v[0], st.v[1]) * 180 / Math.PI + 360) % 360;
+  return [st.p[0], st.p[1], s, h, h];
+}
+
+// ================= after the tracking ends: rebuild the rest of the play from the play-by-play =================
+// Tracking stops ~0.5s after the throw/sack. The description names the target, tackler, interceptor and yards,
+// so we animate ball flight → catch / incompletion / INT → run to the real result spot. Shown as "reconstructed".
+// ponytail: straight-line ball flight and simple pursuit; good enough to show the outcome, not a physics model.
+const NAME = "[A-Z][a-z]{0,2}\\.\\s?[A-Z][\\w'-]+(?:\\.\\s?[A-Z][a-z][\\w'-]*)?"; // C.Godwin, A.St. Brown
+function findPlayer(short, off) {
+  if (!short) return null;
+  const i = short.indexOf('.'), ini = short.slice(0, i), lastN = short.slice(i + 1).trim();
+  const c = cur.ents.filter(e => e.name && (off == null || e.off === off) && e.name.endsWith(lastN));
+  return c.find(e => e.name.startsWith(ini)) || c[0] || (/\.\s/.test(lastN) ? findPlayer(short.slice(0, short.lastIndexOf(". ")), off) : null); // "J.Washington. Coverage by…"
+}
+function spotX(s) { // "TB 41" → x in normalised coords (offense attacks right)
+  const m = s?.match(/(\w+) (-?\d+)/); if (!m) return s ? 60 : null;
+  return m[1] === cur.play.possessionTeam ? 10 + +m[2] : 110 - +m[2];
+}
+function reconstruct() {
+  const p = cur.play, d = p.playDescription || '', n0 = cur.nFrames, ball = cur.ents.find(e => e.id === 'ball');
+  if (!ball) return;
+  const yards = p.prePenaltyPlayResult ?? p.playResult ?? 0, kind = p.passResult;
+  const st = new Map(cur.ents.map(e => { const a = e.f[n0 - 1], b = e.f[n0 - 2] || a;
+    return [e, { p: a.slice(0, 2), v: [(a[0] - b[0]) / DT, (a[1] - b[1]) / DT], top: Math.max(6, ...e.f.map(f => f[2])) }]; }));
+  const target = findPlayer(d.match(new RegExp(`(?:\\bto|intended for) (${NAME})`))?.[1], true);
+  const tackleNames = [...d.matchAll(new RegExp(`\\((${NAME})[;)]`, 'g'))].map(m => m[1]);
+  const clampP = q => [Math.max(0.5, Math.min(119.5, q[0])), Math.max(0.5, Math.min(W - 0.5, q[1]))];
+  const proj = (e, t) => { const s = st.get(e); return clampP([s.p[0] + s.v[0] * t * 0.7, s.p[1] + s.v[1] * t * 0.7]); };
+  let flight = 0, catchPt = null, carrier = null, endPt = null, tackler = null, outcome = null;
+
+  if (['C', 'I', 'IN'].includes(kind) && (target || kind === 'IN')) {
+    let t = 1; for (let i = 0; i < 3; i++) { catchPt = proj(target || ball, t); t = Math.max(0.4, dist(st.get(ball).p, catchPt) / 18); }
+    flight = Math.round(t * 10);
+    if (kind === 'C') {
+      const endX = Math.min(110, cur.los + yards); if (catchPt[0] > endX) catchPt[0] = endX;
+      carrier = target; endPt = [endX, catchPt[1]]; tackler = findPlayer(tackleNames[0], false); outcome = 'pass_outcome_caught';
+    } else if (kind === 'IN') {
+      const m = d.match(new RegExp(`INTERCEPTED by (${NAME})(?: \\[[^\\]]*\\])? at ([A-Z]+ -?\\d+|50)`));
+      carrier = findPlayer(m?.[1], false) || target;
+      if (m) catchPt[0] = spotX(m[2]);
+      const ret = +(d.split('INTERCEPTED')[1].match(/for (-?\d+) yards?/)?.[1] ?? 0);
+      endPt = clampP([catchPt[0] - ret, catchPt[1]]); tackler = findPlayer(tackleNames[0], true); outcome = 'pass_outcome_interception';
+    } else outcome = 'pass_outcome_incomplete';
+  } else if (kind === 'R') {
+    carrier = cur.ents.find(e => e.role === 'Pass'); if (carrier) endPt = [Math.min(110, cur.los + yards), st.get(carrier).p[1]];
+    tackler = findPlayer(tackleNames[0], false);
+  }
+
+  const push = (e, fr) => e.f.push(fr);
+  const coast = (e, k = 0.85) => { const s = st.get(e); s.v = [s.v[0] * k, s.v[1] * k]; s.p = [s.p[0] + s.v[0] * DT, s.p[1] + s.v[1] * DT];
+    return [s.p[0], s.p[1], Math.hypot(...s.v), e.f[e.f.length - 1][3], e.f[e.f.length - 1][4]]; };
+  const people = cur.ents.filter(e => e !== ball);
+  const b0 = st.get(ball).p.slice();
+  let f = 0, phase = 'flight', runFrames = 0, catchFrame = null, endFrame = null;
+  const MAXF = 140;
+  while (f < MAXF) {
+    if (phase === 'flight' && f >= flight) { phase = carrier && endPt ? 'run' : 'hold'; catchFrame = n0 + f; if (phase === 'hold') endFrame = n0 + f; }
+    if (phase === 'run' && (dist(st.get(carrier).p, endPt) < 0.6 || runFrames > 100)) { phase = 'hold'; endFrame = n0 + f; }
+    if (phase === 'hold' && n0 + f - (endFrame ?? n0) >= 10) break;
+    // ball
+    const bs = st.get(ball), setBall = q => { bs.v = [(q[0] - bs.p[0]) / DT, (q[1] - bs.p[1]) / DT]; bs.p = q; push(ball, [q[0], q[1], Math.hypot(...bs.v), 0, 0]); };
+    if (phase === 'flight') { const c = (f + 1) / flight; setBall([b0[0] + (catchPt[0] - b0[0]) * c, b0[1] + (catchPt[1] - b0[1]) * c]); }
+    else if (carrier && endPt) setBall(st.get(carrier).p.slice());
+    else push(ball, coast(ball, 0.6));
+    // players
+    const focus = phase === 'flight' ? catchPt : carrier ? st.get(carrier).p : null;
+    for (const e of people) {
+      const s = st.get(e);
+      if (phase === 'hold' && e === carrier && endPt) { s.p = [s.p[0] + (endPt[0] - s.p[0]) * 0.5, s.p[1] + (endPt[1] - s.p[1]) * 0.5]; s.v = [0, 0]; push(e, [...s.p, 0, e.f.at(-1)[3], e.f.at(-1)[4]]); continue; }
+      if (phase === 'hold') { push(e, coast(e)); continue; }
+      if (phase === 'flight' && (e === target || e === carrier)) push(e, kin(s, catchPt, s.top));
+      else if (phase === 'run' && e === carrier) push(e, kin(s, endPt, s.top * 0.9));
+      else if (phase === 'run' && e === tackler) { const c = st.get(carrier); push(e, kin(s, [c.p[0] + c.v[0] * 0.4, c.p[1] + c.v[1] * 0.4], s.top)); }
+      else if (focus && carrier && e.off !== carrier.off && (phase === 'run' || !e.off)) push(e, kin(s, focus, s.top * 0.75, 5));
+      else push(e, coast(e, 0.9));
+    }
+    if (phase === 'run') runFrames++;
+    f++;
+  }
+  if (!f) return;
+  cur.nFrames = n0 + f;
+  if (outcome && catchFrame != null) cur.events[catchFrame] = outcome;
+  if (endFrame != null && carrier && endPt) cur.events[endFrame] = isTD(p) ? 'touchdown' : / ob at /.test(d) ? 'out_of_bounds' : 'tackle';
+  cur.recon = { start: n0, endPt: carrier ? endPt : null, carrier, tackler, target, catchPt, kind };
 }
 </script>
 </body>

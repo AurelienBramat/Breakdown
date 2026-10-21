@@ -34,7 +34,7 @@ NFL teams and media already collect tracking data on every player in every game,
 ### The product
 A browser app that does three things:
 
-1. **Replay:** a clean 2D replay of any play with broadcast-style context (score, down and distance, clock), a camera that follows the action, and coach overlays (route chart, live "who's open" separation, pressure and blocking breakdown).
+1. **Replay:** a clean 2D replay of any play with broadcast-style context (score, down and distance, clock), a camera that follows the action, and coach overlays (route chart, live "who's open" separation, pressure and blocking breakdown). Each play runs from the line-up through the throw, catch, run after the catch and tackle, with a click-to-jump "play story" timeline.
 2. **Scouting:** each defense's tendencies, computed from real snaps. For example: "Dallas plays man 45% of the time on 3rd down, blitzes on 26% of snaps, and Cover-1 is its favourite call."
 3. **What-if simulation:** change the play (tap a route from the route tree, or draw one) and choose the defensive call ("as called", "their usual", man, zone). The simulation replays the snap instantly. It shows how every defender adjusts and which receiver would have been the QB's best read.
 
@@ -74,10 +74,10 @@ A working prototype covering 122 games and 8,557 pass plays, with replay, scouti
 | Area | What you can do |
 |---|---|
 | **Header** | Pick a game. The scoreboard shows the score, quarter, clock, down and distance, ball spot and possession. |
-| **Left: play list** | Search ("Brady", "deep", "Cover-1"), quick filters (3rd down, Red zone, Big play 20+, TD, Sack, INT, Incomplete), and filter by offense. Each play has a result badge. |
-| **Centre: field** | Auto-zoom camera, with the offense always attacking left → right. Hover a player for his name; click him for details. Toggles: Names, Route chart, Who's open (green ≥ 3 yds, yellow 1.5–3, red < 1.5), Trails, Full field. |
-| **Controls** | Play/pause, previous/next play, jump to Snap or Throw, a timeline with clickable events, and 0.25×–2× speed. |
-| **Right: Play tab** | Formation, personnel, coverage, dropback, rushers or blitz, time to throw, who pressured the QB, beaten blocks, and the selected player's card. |
+| **Left: play list** | Search ("Brady", "deep", "Cover-1"), quick filters (3rd down, Red zone, Big play 20+, TD, Sack, INT, Incomplete), and filters by quarter (Q1–Q4, OT) and by offense. Each play has a result badge. |
+| **Centre: field** | Auto-zoom camera, with the offense always attacking left → right. Hover a player for his name; click him for details. Toggles: Names, Route chart, Who's open (green ≥ 3 yds, yellow 1.5–3, red < 1.5), Trails, Full field. After the throw, the rest of the play is reconstructed (labelled on screen) and the real result spot is marked with ✕. |
+| **Controls** | Play/pause, previous/next play, jump to Snap or Throw, a timeline with clickable events, and 0.25×–2× speed (0.5× by default). |
+| **Right: Play tab** | Game situation (who leads, time left, red zone), a **play story** timeline (line-up → motion / play action → snap → pressure → throw → catch → tackle, plus penalty flags; click a step to jump there), the plays before and after, then formation, personnel, coverage, dropback, rushers or blitz, time to throw, who pressured the QB, beaten blocks, and the selected player's card. |
 | **Right: What-if tab** | 1) Pick a player 2) pick a route (or draw one) and its depth 3) pick the defense call. It re-simulates instantly. An **Original / What-if** switch sits on the field, and a results card under the field shows the best read and each receiver's real vs simulated separation. |
 | **Right: Defense tab** | The team's man/zone split (overall and on this down), average rushers, blitz rate, box count and coverage-call distribution. |
 
@@ -209,7 +209,9 @@ Where to change things in `index.html`:
 - Field drawing and overlays: `drawField()`, `draw()`
 - Camera: `computeView()`
 - Route tree: the `ROUTES` constant (each waypoint is `[downfield yds, outside yds]`)
-- Simulation: `simulate()` and its constants `LAG`, `DT`, `AMAX`
+- Simulation: `simulate()` and its constants `LAG`, `DT`, `AMAX`; shared movement physics: `kin()`
+- Post-throw reconstruction: `reconstruct()` (description parsing: `findPlayer()`, `spotX()`, the `NAME` regex)
+- Play story timeline: `playStory()`
 - Play filters: the `FILTERS` object
 
 ---
@@ -217,7 +219,8 @@ Where to change things in `index.html`:
 ## Limitations
 
 - **Pass plays only, 2021 weeks 1–8:** this is the scope of the Big Data Bowl dataset. There are no run plays and no special teams.
-- **The simulation ends at the throw.** It doesn't predict catch probability or yards after catch, and the ball isn't redirected to a new route.
+- **Tracking covers only about 0.7 s before the snap to 0.5 s after the throw or sack**, because the dataset was built to study pass rushing. The rest of each play (ball flight, catch or incompletion or interception, run after the catch, tackle) is reconstructed in `reconstruct()` from the play-by-play text: the target, tackler, interceptor and the official yardage and spots. The end result is real; the path to it is approximate, and it is labelled "reconstructed" on screen.
+- **The what-if simulation ends at the throw.** It doesn't predict catch probability or yards after catch, and the ball isn't redirected to a new route.
 - **Heuristic defense:** the rules above are plausible, not validated. Pass rushers and blockers aren't re-simulated.
 - **Single process and in-memory cache.** That's fine for a demo, but not multi-tenant.
 
