@@ -100,6 +100,16 @@
   .bar { height:8px; background:#26333d; border-radius:4px; overflow:hidden; margin-top:6px; } .bar b { display:block; height:100%; width:0; background:var(--acc); transition:width .2s; }
   .bar.mini { display:inline-block; width:90px; height:6px; margin:0 4px 0 0; vertical-align:middle; }
   #warm { font-size:12px; } .prog { background:var(--panel2); border:1px solid var(--line); border-radius:9px; padding:12px; margin-top:12px; }
+  #tourShade { position:fixed; z-index:50; border-radius:10px; box-shadow:0 0 0 9999px rgba(5,10,14,.72); outline:2px solid var(--acc); pointer-events:none; transition:all .25s ease; }
+  #tourCard { position:fixed; z-index:51; background:var(--panel); border:1px solid var(--acc); border-radius:12px; padding:14px 16px; box-shadow:0 12px 32px rgba(0,0,0,.55); line-height:1.5; transition:top .25s ease, left .25s ease; }
+  #tourCard a { color:var(--mute); text-decoration:none; } #tourCard a:hover { color:var(--text); }
+  #tourWelcome { position:fixed; inset:0; z-index:52; background:rgba(5,10,14,.82); display:grid; place-items:center; padding:16px; }
+  .welcome { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:26px 28px; max-width:560px; text-align:center; }
+  .welcome h2 { margin:6px 0 4px; } .welcome p { margin:0 0 18px; }
+  .paths { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; }
+  .paths button { display:flex; flex-direction:column; align-items:center; gap:4px; padding:16px 12px; border-radius:12px; white-space:normal; background:var(--panel2); }
+  .paths button:hover { border-color:var(--acc); background:#22303a; } .paths span { font-size:28px; } .paths b { font-size:15px; } .paths small { color:var(--mute); }
+  .welcome a { color:var(--mute); } @media (max-width:560px) { .paths { grid-template-columns:1fr; } }
   ul.style { margin:0; padding-left:18px; line-height:1.8; } ul.style b { color:var(--acc); }
   .barrow span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .controls { position:sticky; bottom:0; z-index:3; background:var(--bg); padding:8px 0; border-top:1px solid var(--line); }
@@ -121,6 +131,7 @@
   <h1>GRIDIRON <span>REPLAY</span></h1>
   <select id="game"></select>
   <button id="scoutBtn" title="Team and player tendencies over one or more games">📊 Scouting</button>
+  <button id="helpBtn" title="Show the tutorial again">❓ Tour</button>
   <span id="warm" class="muted" hidden title="Runs once in the background on worker threads, then cached"><span class="bar mini"><b></b></span> <span id="warmTxt"></span></span>
   <div id="board"></div>
 </header>
@@ -174,6 +185,16 @@
   <div class="tab" id="tab-defense"><p class="muted">Pick a play to see how this defense usually plays.</p></div>
 </aside>
 
+<div id="tourShade" hidden></div><div id="tourCard" hidden role="dialog" aria-live="polite"></div>
+<div id="tourWelcome" hidden role="dialog" aria-label="Welcome"><div class="welcome">
+  <div style="font-size:34px">🏈</div><h2>Welcome to Gridiron Replay</h2>
+  <p class="muted">Rewatch every NFL pass play like a coach, then change it and see what would have happened. Want a quick tour?</p>
+  <div class="paths">
+    <button data-path="fan"><span>🏟</span><b>I'm a fan</b><small>Watch plays, see who was open, try your own what-if · 1 min</small></button>
+    <button data-path="coach"><span>📋</span><b>I'm a coach</b><small>What-if tools, compare play calls, scouting reports · 2 min</small></button>
+  </div>
+  <a href="#" data-path="skip" class="muted">Skip, I'll explore on my own</a>
+</div></div>
 <script>
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 let cv = $('#field'), ctx = cv.getContext('2d'); // swapped while drawing the compare view's mini fields
@@ -1386,6 +1407,101 @@ $('#scoutBody').onclick = async e => {
 };
 $('#scoutBtn').onclick = () => document.body.classList.contains('scouting') ? closeScout() : openScout();
 $('#board').onclick = e => { const t = e.target.closest('.team'); if (t) openScout({ kind: 'team', team: t.dataset.team, side: t.dataset.team === cur.play.possessionTeam ? 'off' : 'def', games: [] }); };
+// ================= first-visit tour: a spotlight walkthrough, one path for fans and one for coaches =================
+const TOUR_KEY = 'gridiron-tour-done';
+const tourBase = [
+  { el: '#left', title: 'Pick a play', text: 'Every pass play from weeks 1–8 of the 2021 season. Use the chips on top to find what you care about: <b>3rd down</b>, <b>Red zone</b>, <b>Big plays</b>, <b>TDs</b>, <b>Sacks</b>, a quarter or one team\'s offense.' },
+  { el: '#stage', title: 'Watch it like a coach', text: 'Real player tracking, 10 times a second. The offense always attacks <b>left → right</b>. Hover a player for his name, click him for details. The ball is the one with the <b style="color:#ffd600">yellow halo</b>.' },
+  { el: '.controls', title: 'Control the replay', text: '<b>Space</b> plays or pauses, <b>← →</b> step one frame. <b>Snap</b> and <b>Throw</b> jump to the key moments, and the labels on the timeline are clickable. Slow it down with <b>0.25×</b> to see the details.' },
+  { el: '.toggles', title: 'See what the QB saw', text: '<b>Route chart</b> draws every route. <b>Who\'s open</b> puts a ring on each receiver: <span class="good">green</span> = open (3+ yds), <span class="warn">yellow</span> = tight, <span class="bad">red</span> = covered.' },
+  { el: '#right', title: 'The story of the play', text: 'Formation, coverage, who pressured the QB, and a step-by-step <b>play story</b>: click any step to jump there. Steps marked * are rebuilt from the play-by-play, because the tracking stops at the throw.', before: () => setTab('play') },
+];
+const tourFan = [
+  { el: '[data-t="whatif"]', title: 'Play coach: what if…?', text: 'Click a receiver, tap a route like <b>Post</b> or <b>Slant</b>, and watch the defense react. It replays instantly and tells you if he\'d have been open. Try it on any play!', before: () => setTab('whatif') },
+  { el: '#board', title: 'How does this team play?', text: 'Click a team on the scoreboard for its <b>scouting report</b>: how often they throw deep, blitz, who they target… in plain words.', before: () => setTab('play') },
+];
+const tourCoach = [
+  { el: '#tab-whatif .step:nth-of-type(1)', title: 'What-if: change any player', text: 'Pick any player here or on the field. <b>Offense:</b> a route from the route tree (or draw one and drag its points). <b>Defense:</b> blitz, man on a receiver of your choice, or a zone drop to a spot you click. At the snap, <b>drag anyone</b> to change his alignment.', before: () => { setTab('whatif'); seek(cur.S); } },
+  { el: '#tab-whatif .step:nth-of-type(3)', title: 'Change the defense call', text: 'Replay the snap against a different coverage: as called, <b>their usual</b> (from this team’s real tendencies on this down), man or zone. The defenders re-react with their real speed.', before: () => setTab('whatif') },
+  { el: '#tab-whatif .step:nth-of-type(4)', title: 'Coach the quarterback', text: 'Set <b>when</b> he throws with the slider and <b>who</b> he throws to (or let him find the most open man). Throw early to beat a blitz, or hold it too long and get sacked.', before: () => setTab('whatif') },
+  { el: '#tab-whatif .step:nth-of-type(5)', title: 'Save, undo, compare', text: 'Every change is listed and undoable (<b>Ctrl+Z</b>). <b>💾 Save</b> a few play calls, then <b>⚖ Compare</b> plays them side by side in sync, with a scorecard and a 🏆 on the best result.', before: () => { setTab('whatif'); $('#tab-whatif .step:nth-of-type(5)')?.scrollIntoView({ block: 'nearest' }); } },
+  { el: '#scoutBtn', title: 'Scouting reports', text: 'Any team\'s <b>offense or defense</b>, or any player, over one game, several or all of them: a playstyle summary vs the league, pass map, coverages and where they leak, leaders. Every name and big play is clickable.', before: () => setTab('play') },
+  { el: '#stage', title: 'How far to trust it', text: 'Replays up to the throw are real tracking. The rest of each play is rebuilt from the play-by-play, and what-if results come from rules checked against real throws (about 72% right on catch vs no catch). Use them to <b>compare ideas</b>, not as exact predictions.' },
+];
+const tourEnd = { el: '#helpBtn', title: 'You\'re set!', text: 'That\'s it. Click <b>❓ Tour</b> anytime to see this again. Enjoy the film room.' };
+let tour = null;
+function startTour(path) {
+  tour = { steps: [...tourBase, ...(path === 'coach' ? tourCoach : tourFan), tourEnd], i: 0, path };
+  $('#tourWelcome').hidden = true; showStep();
+}
+function endTour() {
+  tour = null; $('#tourShade').hidden = true; $('#tourCard').hidden = true; $('#tourWelcome').hidden = true;
+  try { localStorage.setItem(TOUR_KEY, '1'); } catch { /* private mode: the tour may show again next visit */ }
+  if (cur) setTab('play');
+}
+function showStep() {
+  const s = tour.steps[tour.i];
+  if (cur) s.before?.();
+  requestAnimationFrame(placeStep); setTimeout(placeStep, 60); // after any tab switch has laid out (rAF can be paused in background tabs)
+}
+function placeStep() {
+  if (!tour) return;
+  const s = tour.steps[tour.i], t = $(s.el), shade = $('#tourShade'), card = $('#tourCard');
+  if (!t) { tour.i < tour.steps.length - 1 ? (tour.i++, showStep()) : endTour(); return; } // element not on screen: skip it
+  const vw = innerWidth, vh = innerHeight, pre = t.getBoundingClientRect();
+  if (pre.top < 0 || pre.bottom > vh) t.scrollIntoView({ block: pre.height > vh ? 'start' : 'nearest' }); // e.g. a what-if step scrolled away
+  const r = t.getBoundingClientRect(), pad = 6;
+  Object.assign(shade.style, { left: r.left - pad + 'px', top: r.top - pad + 'px', width: r.width + 2 * pad + 'px', height: r.height + 2 * pad + 'px' });
+  shade.hidden = false;
+  card.innerHTML = `<div class="muted" style="font-size:11px">${tour.path === 'coach' ? '📋 Coach tour' : '🏟 Fan tour'} · ${tour.i + 1} / ${tour.steps.length}</div>
+    <b style="font-size:15px;display:block;margin:4px 0 6px">${s.title}</b><div>${s.text}</div>
+    <div class="row" style="margin-top:12px"><a href="#" data-tour="skip" class="muted">Skip tour</a><span style="margin-left:auto"></span>
+      ${tour.i ? '<button data-tour="back">Back</button>' : ''}<button data-tour="next" class="on">${tour.i === tour.steps.length - 1 ? 'Done' : 'Next'}</button></div>`;
+  card.hidden = false;
+  // put the card where there is room and it hides nothing: tall areas get it beside them, others below / above
+  // candidates: beside the area (the card may narrow to 260px to fit) or below / above it
+  const gap = 14, full = Math.min(340, vw - 24), right = vw - 8 - (r.right + gap), left = r.left - gap - 8;
+  const side = [right >= 260 && { x: r.right + gap, y: r.top, w: Math.min(full, right) }, left >= 260 && { x: r.left - gap - Math.min(full, left), y: r.top, w: Math.min(full, left) }].filter(Boolean);
+  const vert = [{ x: r.left, y: r.bottom + gap, w: full, below: true }, { x: r.left, y: null, w: full, above: true }];
+  const tall = r.height > vh * 0.45, order = tall ? [...side, ...vert] : [...vert, ...side];
+  let pick = null;
+  for (const o of order) {
+    card.style.width = o.w + 'px'; const ch = card.offsetHeight;
+    const y = o.above ? r.top - ch - gap : o.below ? o.y : Math.max(8, Math.min(vh - ch - 8, o.y));
+    if (y >= 8 && y + ch <= vh - 8) { pick = { x: o.x, y, w: o.w }; break; }
+  }
+  if (!pick) { card.style.width = full + 'px'; pick = { x: vw / 2 - full / 2, y: vh - card.offsetHeight - 8, w: full }; } // nowhere free: bottom centre
+  Object.assign(card.style, { width: pick.w + 'px', left: Math.max(8, Math.min(vw - pick.w - 8, pick.x)) + 'px', top: pick.y + 'px' });
+  card.querySelector('[data-tour="next"]').focus();
+}
+$('#tourCard').onclick = e => {
+  const a = e.target.closest('[data-tour]'); if (!a) return; e.preventDefault();
+  if (a.dataset.tour === 'skip') return endTour();
+  if (a.dataset.tour === 'back') tour.i--; else if (tour.i === tour.steps.length - 1) return endTour(); else tour.i++;
+  showStep();
+};
+$('#tourWelcome').onclick = e => {
+  const b = e.target.closest('[data-path]'); if (!b) return; e.preventDefault();
+  b.dataset.path === 'skip' ? endTour() : startTour(b.dataset.path);
+};
+// while the tour is open it owns the keyboard (so arrows don't scrub the replay underneath)
+document.addEventListener('keydown', e => {
+  if (!tour && $('#tourWelcome').hidden) return;
+  e.stopImmediatePropagation();
+  if (e.key === 'Escape') { e.preventDefault(); endTour(); }
+  else if (tour && (e.key === 'ArrowRight' || e.key === 'Enter')) { e.preventDefault(); $('#tourCard [data-tour="next"]').click(); }
+  else if (tour && e.key === 'ArrowLeft' && tour.i) { e.preventDefault(); tour.i--; showStep(); }
+}, true);
+addEventListener('resize', () => tour && placeStep());
+function openWelcome() { if (document.body.classList.contains('scouting')) closeScout(); closeCompare(true); playing = false; syncPlay(); $('#tourWelcome').hidden = false; }
+$('#helpBtn').onclick = openWelcome;
+// first visit: offer the tour once the first play is on screen
+(async function firstVisit() {
+  let seen = false; try { seen = !!localStorage.getItem(TOUR_KEY); } catch { /* treat as new */ }
+  if (seen) return;
+  for (let i = 0; i < 100 && !cur; i++) await new Promise(r => setTimeout(r, 100));
+  openWelcome();
+})();
 </script>
 </body>
 </html>

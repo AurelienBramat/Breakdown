@@ -75,6 +75,7 @@ A working prototype covering 122 games and 8,557 pass plays, with replay, scouti
 
 | Area | What you can do |
 |---|---|
+| **First-visit tour** | New visitors are asked "fan or coach?" and get a spotlight walkthrough: **fans** (8 steps, ~1 min) see how to find and watch plays, read who was open, and try a what-if; **coaches** (12 steps, ~2 min) also get the what-if tools, comparing play calls, scouting reports and how far to trust the simulator. Next/Back or ←/→, Esc to skip. It shows once; **❓ Tour** in the header replays it. |
 | **Header** | Pick a game. The scoreboard shows the score, quarter, clock, down and distance, ball spot and possession. |
 | **Left: play list** | Search ("Brady", "deep", "Cover-1"), quick filters (3rd down, Red zone, Big play 20+, TD, Sack, INT, Incomplete), and filters by quarter (Q1–Q4, OT) and by offense. Each play has a result badge. |
 | **Centre: field** | Auto-zoom camera, with the offense always attacking left → right. Hover a player for his name; click him for details. Toggles: Names, Route chart, Who's open (green ≥ 3 yds, yellow 1.5–3, red < 1.5), Trails, Full field. After the throw, the rest of the play is reconstructed (labelled on screen) and the real result spot is marked with ✕. |
@@ -228,6 +229,7 @@ Where to change things in `index.html`:
 - What-if panel and scenario state (undo, save/load): `renderWhatIf()`, `change()`, `undo()`, `snapWi()`
 - Compare view: `openCompare()`, `summary()` (scorecard and ranking), `renderCompare()`, `drawInto()` (draws one scenario into its mini field)
 - Scouting view: `openScout()`, `renderScout()`, `playstyle()` (the summary sentences and their thresholds vs the league), `alignLabel()` (PFF alignment codes → words); the stats themselves live in `app/report.js`
+- First-visit tour: the `tourBase`, `tourFan`, `tourCoach` step lists (each step is a CSS selector, a title, text and an optional `before()` that switches tabs); `placeStep()` positions the spotlight and card
 - Post-throw reconstruction: `reconstruct()` (description parsing: `findPlayer()`, `spotX()`, the `NAME` regex)
 - Play story timeline: `playStory()`
 - Play filters: the `FILTERS` object
