@@ -85,6 +85,14 @@
   .verdict { font-size:11px; font-weight:700; padding:1px 7px; border-radius:10px; }
   .verdict.open { background:var(--good); color:#06180e; } .verdict.tight { background:var(--warn); color:#111; } .verdict.covered { background:var(--bad); color:#fff; }
   .headline { font-size:15px; font-weight:600; }
+  .controls { position:sticky; bottom:0; z-index:3; background:var(--bg); padding:8px 0; border-top:1px solid var(--line); }
+  .cgrid { display:grid; gap:10px; }
+  .ccell { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:8px; display:flex; flex-direction:column; gap:6px; }
+  .ccell.win { border-color:var(--good); box-shadow:0 0 0 1px var(--good); }
+  .ccell canvas { width:100%; display:block; border-radius:7px; background:#173b22; }
+  .ctable { width:100%; border-collapse:collapse; margin-top:12px; font-size:12.5px; }
+  .ctable th, .ctable td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .ctable td:first-child { color:var(--mute); white-space:nowrap; }
   .changes div { display:flex; justify-content:space-between; gap:8px; padding:3px 6px; border-radius:6px; } .changes div:hover { background:#24323c; }
   .changes a, .tab a { color:var(--acc); text-decoration:none; }
   .story { display:grid; grid-template-columns:44px 1fr; gap:8px; padding:4px 6px; border-radius:6px; cursor:pointer; }
@@ -116,7 +124,8 @@
     <div id="empty">← Pick a play to start</div>
     <div id="tip"></div>
   </div>
-  <div class="row">
+  <div id="compare" hidden></div>
+  <div class="row controls">
     <button id="prev" title="Previous play (P)">⏮</button>
     <button id="play" title="Play / pause (Space)">▶</button>
     <button id="next" title="Next play (N)">⏭</button>
@@ -147,7 +156,7 @@
 
 <script>
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
-const cv = $('#field'), ctx = cv.getContext('2d');
+let cv = $('#field'), ctx = cv.getContext('2d'); // swapped while drawing the compare view's mini fields
 const W = 53.3, DPR = window.devicePixelRatio || 1;
 const COLORS = { ARI:'#97233F',ATL:'#A71930',BAL:'#5b3fb5',BUF:'#1f4fb0',CAR:'#0085CA',CHI:'#C83803',CIN:'#FB4F14',CLE:'#FF3C00',DAL:'#3f72c9',DEN:'#FB4F14',DET:'#0076B6',GB:'#2f7d4f',HOU:'#A71930',IND:'#2a6fd6',JAX:'#006778',KC:'#E31837',LA:'#2d55b5',LAC:'#0080C6',LV:'#8f969a',MIA:'#008E97',MIN:'#6b3fb0',NE:'#3a5a9a',NO:'#b39a5e',NYG:'#2a4aa0',NYJ:'#1d7a55',PHI:'#00707a',PIT:'#d9a000',SEA:'#4f9a1f',SF:'#AA0000',TB:'#D50A0A',TEN:'#4B92DB',WAS:'#a03a3a' };
 const SNAP = ['ball_snap', 'autoevent_ballsnap'], END = ['pass_forward', 'autoevent_passforward', 'qb_sack', 'qb_strip_sack', 'run', 'fumble'];
@@ -234,7 +243,7 @@ async function loadPlay(id) {
     if (flip) e.f = e.f.map(p => [120 - p[0], W - p[1], p[2], (p[3] + 180) % 360, (p[4] + 180) % 360]);
     e.off = e.team === data.play.possessionTeam;
   }
-  cur = data;
+  closeCompare(true); cur = data;
   cur.los = flip ? 120 - data.play.absoluteYardlineNumber : data.play.absoluteYardlineNumber;
   const ev = Object.entries(cur.events).map(([f, e]) => [+f, e]);
   cur.S = ev.find(([, e]) => SNAP.includes(e))?.[0] ?? 0;
@@ -364,7 +373,7 @@ const toYd = (cx, cy) => [cx / k() + view.x0, view.y0 + view.w / 2 - cy / k()];
 
 // ================= drawing =================
 const pos = (e, f) => (viewSim && sim?.pos[e.id]?.[f]) || e.f[f];
-const maxFrame = () => viewSim ? sim.end : cur.nFrames - 1;
+const maxFrame = () => compare ? Math.max(...compare.map(c => c.sim ? c.sim.end : cur.nFrames - 1)) : viewSim ? sim.end : cur.nFrames - 1;
 const throwFrame = () => viewSim ? sim.T : cur.E;
 function separation(e, f) {
   const me = pos(e, f), opp = cur.ents.filter(o => o.id !== 'ball' && o.off !== e.off);
@@ -402,12 +411,14 @@ function path(pts, color, width, dash = []) {
 
 function draw() {
   if (!view) computeView();
+  if (cur) { $('#scrub').max = maxFrame(); $('#scrub').value = frame; const t = (frame - cur.S) / 10; $('#clock').textContent = `${t < 0 ? 'pre-snap ' : '+'}${Math.abs(t).toFixed(1)}s`; }
+  if (compare) { compare.forEach(drawInto); return; }
+  drawScene(); renderPlayerCard();
+}
+function drawScene() {
   drawField();
   if (!cur) return;
   const u = k(), R = Math.max(0.85 * u, 7 * DPR), players = cur.ents.filter(e => e.id !== 'ball');
-  $('#scrub').max = maxFrame(); $('#scrub').value = frame;
-  const t = (frame - cur.S) / 10;
-  $('#clock').textContent = `${t < 0 ? 'pre-snap ' : '+'}${Math.abs(t).toFixed(1)}s`;
 
   const changed = id => viewSim && sim.changed.has(id);
   // route chart: whole route from snap to the throw
@@ -476,7 +487,6 @@ function draw() {
     ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(10 * DPR, cv.height - 30 * DPR, w + 20 * DPR, 22 * DPR);
     ctx.fillStyle = '#f5b82e'; ctx.textAlign = 'left'; ctx.fillText(msg, 20 * DPR, cv.height - 19 * DPR);
   }
-  renderPlayerCard();
 }
 
 // ================= timeline & playback =================
@@ -672,7 +682,7 @@ function renderWhatIf() {
       <div class="chips"><button data-to="" class="${wi.throwTo ? '' : 'on'}">Best open (auto)</button>${routes.map(r => `<button data-to="${r.id}" class="${wi.throwTo === r.id ? 'on' : ''}">${tag(r)}</button>`).join('')}</div></div>
     <div class="step"><b><i>5</i> Scenario</b>
       ${changes.length ? `<div class="changes">${changes.map(([l, k]) => `<div><span>${l}</span><a href="#" data-rm="${k}" title="Remove">✕</a></div>`).join('')}</div>` : '<p class="muted">No changes yet: this is the real play.</p>'}
-      <div class="row" style="margin-top:6px"><button data-act="undo" ${hist.length ? '' : 'disabled'}>↶ Undo</button><button data-act="reset" ${changes.length ? '' : 'disabled'}>↺ Reset all</button><button data-act="save" ${changes.length ? '' : 'disabled'}>💾 Save</button></div>
+      <div class="row" style="margin-top:6px"><button data-act="undo" ${hist.length ? '' : 'disabled'}>↶ Undo</button><button data-act="reset" ${changes.length ? '' : 'disabled'}>↺ Reset all</button><button data-act="save" ${changes.length ? '' : 'disabled'}>💾 Save</button><button data-act="compare" ${saved.length || changes.length ? '' : 'disabled'} title="Real play, current what-if and saved scenarios side by side">⚖ Compare</button></div>
       ${saved.length ? `<div class="muted" style="margin:8px 0 3px">Saved for this play</div><div class="changes">${saved.map((s, i) => `<div><a href="#" data-load="${i}">${esc(s.name)}</a><a href="#" data-del="${i}" title="Delete">✕</a></div>`).join('')}</div>` : ''}</div>`;
   renderResults();
 }
@@ -702,6 +712,7 @@ $('#tab-whatif').onclick = ev => {
     case 'unalign': return change(() => { delete wi.align[e.id]; for (const [id, r] of Object.entries(wi.route)) if (id === e.id && ROUTES[r]) wi.edits[id] = routePoints(e, r); });
     case 'realtime': return change(() => { wi.throwAt = null; });
     case 'undo': return undo();
+    case 'compare': return openCompare();
     case 'reset': return change(() => resetWi());
     case 'save': { const list = savedAll()[playKey()] || [], name = prompt('Name this scenario', `Scenario ${list.length + 1}`); if (!name) return;
       list.push({ name, state: snapWi() }); storeSaved(list); renderWhatIf(); return; }
@@ -744,6 +755,92 @@ function renderResults() {
     </div>
     <p class="muted">How the outcome is decided: the ball is led to the target at ~18 yd/s. It's a catch if he was 1.5+ yds open at the throw or no defender is within 2 yds at the catch; otherwise it's broken up (or picked off if a defender beats him to the spot). He then runs until a defender reaches him. Checked against real throws from games it was not tuned on, it calls catch vs no catch right about 72% of the time (always guessing "catch" gets 69%), so treat it as a hint, not a prediction. Toggle <b>Original / What-if</b> on the field to compare.</p>`;
 }
+
+// ================= compare: real play vs what-ifs, side by side, in sync =================
+let compare = null; // [{ key, name, sim, on, canvas, ctx }] while the compare view is open
+function simulateWith(state) { // run the engine for a saved state without touching the coach's current one
+  const keep = snapWi(); Object.assign(wi, state);
+  try { return isActive() ? simulate() : null; } finally { Object.assign(wi, JSON.parse(keep)); }
+}
+function openCompare() {
+  const saved = savedAll()[playKey()] || [], list = [{ key: 'real', name: 'Real play', sim: null }];
+  if (isActive()) list.push({ key: 'current', name: 'Current what-if', state: JSON.parse(snapWi()) });
+  saved.forEach(s => list.push({ name: s.name, state: JSON.parse(s.state) }));
+  for (const c of list) if (c.state) c.sim = simulateWith(c.state);
+  list.forEach((c, i) => c.on = i < 4);
+  compare = list; playing = false; frame = cur.S;
+  renderCompare(); seek(cur.S);
+}
+function closeCompare(silent) {
+  if (!compare) return;
+  compare = null; $('#compare').hidden = true; $('#stage').hidden = false; $('#results').hidden = false;
+  if (!silent) { frame = Math.min(frame, maxFrame()); draw(); }
+}
+// one comparable summary per option, for the real play too
+function summary(c) {
+  const p = cur.play, s = c.sim, keep = [sim, viewSim];
+  sim = s; viewSim = !!s;
+  try {
+    const T = s ? s.T : cur.E;
+    const routes = cur.ents.filter(e => e.off && (e.role === 'Pass Route' || c.state?.edits?.[e.id]?.length));
+    const seps = routes.map(e => [e, separation(e, T)]).sort((a, b) => b[1] - a[1]);
+    let kind, yards, target, by, td;
+    if (s) ({ kind, yards, target, by, td } = s.result);
+    else {
+      kind = { C: 'catch', I: 'inc', IN: 'int', S: 'sack', R: 'scramble' }[p.passResult] || 'inc';
+      yards = ['catch', 'sack', 'scramble'].includes(kind) ? (p.prePenaltyPlayResult ?? p.playResult ?? 0) : 0;
+      target = cur.recon?.target; by = cur.recon?.carrier && kind === 'int' ? cur.recon.carrier : null; td = isTD(p);
+    }
+    const tSep = target ? separation(target, T) : null;
+    // ranking: yards gained, a TD bonus, turnovers and sacks punished
+    const score = kind === 'int' ? -30 : (yards || 0) + (td ? 10 : 0) - (kind === 'sack' ? 5 : 0);
+    const label = { catch: td ? 'TOUCHDOWN' : 'Complete', inc: 'Incomplete', pbu: 'Broken up', int: 'Interception', sack: 'Sack', scramble: 'Scramble' }[kind];
+    return { kind, label, yards, td, target, by, tSep, best: seps[0], tThrow: (T - cur.S) / 10, score, changes: c.state, auto: !!c.sim && !c.state.throwTo && s.result.kind !== 'sack' };
+  } finally { [sim, viewSim] = keep; }
+}
+function changeCount(state) {
+  if (!state) return 0;
+  return Object.keys(state.route || {}).length + Object.keys(state.align || {}).length + Object.keys(state.assign || {}).length
+    + (state.cov !== 'played') + (state.throwAt != null) + (state.throwTo != null);
+}
+function renderCompare() {
+  const on = compare.filter(c => c.on), sums = on.map(summary), top = Math.max(...sums.map(s => s.score));
+  const winners = sums.filter(s => s.score === top).length;
+  const yd = y => `${y > 0 ? '+' : ''}${y}`;
+  const cls = s => s.kind === 'catch' || s.kind === 'scramble' ? (s.yards > 0 ? 'good' : '') : s.kind === 'int' || s.kind === 'sack' ? 'bad' : 'muted';
+  $('#stage').hidden = true; $('#results').hidden = true; $('#compare').hidden = false;
+  $('#compare').innerHTML = `
+    <div class="row" style="margin-bottom:8px"><b style="font-size:14px">⚖ Compare</b><span class="muted">same snap, played in sync: use the controls below</span>
+      <button data-cclose style="margin-left:auto">✕ Close</button></div>
+    <div class="chips" style="margin-bottom:8px">${compare.map((c, i) => `<button data-ctoggle="${i}" class="${c.on ? 'on' : ''}">${esc(c.name)}</button>`).join('')}</div>
+    ${on.length ? `<div class="cgrid" style="grid-template-columns:repeat(${on.length > 1 ? 2 : 1}, 1fr)">${on.map((c, i) => `<div class="ccell ${sums[i].score === top && winners === 1 && on.length > 1 ? 'win' : ''}">
+        <div class="row"><b>${esc(c.name)}</b>${sums[i].score === top && winners === 1 && on.length > 1 ? '<span class="verdict open">🏆 BEST</span>' : ''}
+          <span class="${cls(sums[i])}" style="margin-left:auto;font-weight:700">${sums[i].label}${['catch', 'sack', 'scramble'].includes(sums[i].kind) ? ' ' + yd(sums[i].yards) : ''}</span></div>
+        <canvas data-c="${compare.indexOf(c)}"></canvas></div>`).join('')}</div>
+    <table class="ctable"><tr><th></th>${on.map(c => `<th>${esc(c.name)}</th>`).join('')}</tr>
+      <tr><td>Result</td>${sums.map(s => `<td class="${cls(s)}"><b>${s.label}</b>${s.by && s.kind !== 'catch' ? ` · ${tag(s.by)}` : ''}</td>`).join('')}</tr>
+      <tr><td>Yards</td>${sums.map(s => `<td>${['catch', 'sack', 'scramble'].includes(s.kind) ? yd(s.yards) : '0'}</td>`).join('')}</tr>
+      <tr><td>Ball out</td>${sums.map(s => `<td>${s.kind === 'sack' ? `sacked at ${s.tThrow.toFixed(1)}s` : s.tThrow.toFixed(1) + 's'}</td>`).join('')}</tr>
+      <tr><td>Target (open at throw)</td>${sums.map(s => `<td>${s.target ? `${tag(s.target)} · ${s.tSep.toFixed(1)} yds${s.auto ? ' <span class="muted">(auto: best open)</span>' : ''}` : '-'}</td>`).join('')}</tr>
+      <tr><td>Most open receiver</td>${sums.map(s => `<td>${s.best ? `${tag(s.best[0])} · ${s.best[1].toFixed(1)} yds` : '-'}</td>`).join('')}</tr>
+      <tr><td>Changes vs real</td>${sums.map(s => `<td>${changeCount(s.changes) || '-'}</td>`).join('')}</tr>
+    </table>
+    <p class="muted">🏆 = most yards (TD +10, sack −5, interception counts as −30). What-if outcomes come from the simulator's rules: compare them with each other, they are not exact predictions.</p>` : '<p class="muted">Turn on at least one option above.</p>'}`;
+  for (const c of compare) { c.canvas = $(`#compare canvas[data-c="${compare.indexOf(c)}"]`); if (c.canvas) { c.canvas.width = c.canvas.clientWidth * DPR; c.canvas.height = c.canvas.width / 2; c.ctx = c.canvas.getContext('2d'); } }
+  draw();
+}
+function drawInto(c) {
+  if (!c.on || !c.canvas) return;
+  const keep = [cv, ctx, sim, viewSim, tab, frame, compare];
+  cv = c.canvas; ctx = c.ctx; sim = c.sim; viewSim = !!c.sim; tab = 'compare'; compare = null; frame = Math.min(frame, maxFrame());
+  try { drawScene(); } finally { [cv, ctx, sim, viewSim, tab, frame, compare] = keep; }
+}
+$('#compare').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.cclose !== undefined) return closeCompare();
+  if (b.dataset.ctoggle) { const c = compare[+b.dataset.ctoggle]; c.on = !c.on; renderCompare(); }
+};
+window.addEventListener('resize', () => { if (compare) renderCompare(); });
 
 // ================= the what-if engine =================
 // Steps the whole play frame by frame (10 Hz) so everyone reacts to everyone:

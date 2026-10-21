@@ -37,6 +37,7 @@ A browser app that does three things:
 1. **Replay:** a clean 2D replay of any play with broadcast-style context (score, down and distance, clock), a camera that follows the action, and coach overlays (route chart, live "who's open" separation, pressure and blocking breakdown). Each play runs from the line-up through the throw, catch, run after the catch and tackle, with a click-to-jump "play story" timeline.
 2. **Scouting:** each defense's tendencies, computed from real snaps. For example: "Dallas plays man 45% of the time on 3rd down, blitzes on 26% of snaps, and Cover-1 is its favourite call."
 3. **What-if simulation:** coaches can change almost anything about the play. Give any receiver a new route (route tree, or draw one and drag its points), move any player's pre-snap alignment, send any defender on a blitz, put him in man on a receiver you pick or drop him into a zone spot you click, switch the coverage call, and choose when the QB throws and to whom. The play re-simulates instantly through to the outcome (sack, catch, breakup or interception, then the run after the catch), and every scenario can be undone or saved.
+4. **Compare:** put the real play, the current what-if and any saved scenarios side by side. They play in sync on mini fields, with a scorecard table (result, yards, time to throw, target, most open receiver) and a 🏆 on the best result. A coach can test three play calls against the same defense and see which one wins.
 
 ### Why it's different
 - **Interactive, not passive:** the what-if engine is the core feature. Most analytics tools describe a play; this one lets you rerun it with changes.
@@ -79,6 +80,7 @@ A working prototype covering 122 games and 8,557 pass plays, with replay, scouti
 | **Controls** | Play/pause, previous/next play, jump to Snap or Throw, a timeline with clickable events, and 0.25×–2× speed (0.5× by default). |
 | **Right: Play tab** | Game situation (who leads, time left, red zone), a **play story** timeline (line-up → motion / play action → snap → pressure → throw → catch → tackle, plus penalty flags; click a step to jump there), the plays before and after, then formation, personnel, coverage, dropback, rushers or blitz, time to throw, who pressured the QB, beaten blocks, and the selected player's card. |
 | **Right: What-if tab** | 1) Pick any player (chips or click the field). 2) Offense: a route from the route tree (15 routes, short/normal/deep) or draw your own, then drag the gold points to fine-tune. Defense: as played / blitz / man on a receiver / zone drop (click the spot). Drag any player at the snap to change his alignment. 3) Defense call. 4) Quarterback: throw time slider and throw target (or "best open"). 5) Scenario: a list of every change (✕ removes one), Undo (also Ctrl+Z), Reset, and Save / load named scenarios (kept in your browser). A results card under the field shows the simulated outcome vs the real one, plus each receiver's separation. |
+| **Compare view** | From the What-if tab, **⚖ Compare** opens the real play, the current what-if and every saved scenario for this snap side by side (up to 4 shown at once; toggle any on or off). One set of controls plays them all in sync. The table underneath compares result, yards, ball-out time, target and its separation (marked *auto* when the QB picked the most open man), most open receiver and number of changes. 🏆 marks the best result: most yards, a TD +10, a sack −5, an interception counts as −30. |
 | **Right: Defense tab** | The team's man/zone split (overall and on this down), average rushers, blitz rate, box count and coverage-call distribution. |
 
 **Keyboard:** `Space` play/pause · `←` `→` step a frame · `S` snap · `T` throw · `N` / `P` next/previous play.
@@ -211,6 +213,7 @@ Where to change things in `index.html`:
 - Route tree: the `ROUTES` constant (each waypoint is `[downfield yds, outside yds]`)
 - Simulation: `simulate()` (defender jobs, sack check, throw outcome thresholds) and its constants `LAG`, `DT`, `AMAX`; shared movement physics: `kin()`; drawn routes: `routeTrack()`
 - What-if panel and scenario state (undo, save/load): `renderWhatIf()`, `change()`, `undo()`, `snapWi()`
+- Compare view: `openCompare()`, `summary()` (scorecard and ranking), `renderCompare()`, `drawInto()` (draws one scenario into its mini field)
 - Post-throw reconstruction: `reconstruct()` (description parsing: `findPlayer()`, `spotX()`, the `NAME` regex)
 - Play story timeline: `playStory()`
 - Play filters: the `FILTERS` object
