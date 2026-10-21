@@ -3,7 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const DATA = path.join(__dirname, '..', 'data');
+const DATA = process.env.DATA_DIR || path.join(__dirname, '..', 'nfl-big-data-bowl-regional-event-data-main', 'data');
 const PORT = process.env.PORT || 3000;
 
 // Minimal CSV parser (handles quoted fields with commas). Returns array of objects.

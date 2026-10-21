@@ -4,7 +4,7 @@ Football-manager style replay + what-if simulator for the NFL Big Data Bowl trac
 
 ## Run
 
-1. Put the Big Data Bowl CSVs in `data/` (`games.csv`, `plays.csv`, `players.csv`, `pffScoutingData.csv`, `tracking/tracking_*.csv`). Not committed (~826 MB).
+1. Data lives in `nfl-big-data-bowl-regional-event-data-main/data/` (override with `DATA_DIR`).
 2. `node app/server.js` (no dependencies) and open http://localhost:3000
 
 ## Features
