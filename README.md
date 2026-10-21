@@ -95,8 +95,8 @@ A working prototype covering 122 games and 8,557 pass plays, with replay, scouti
 Requirements: **Node.js 18+**. Nothing else: no `npm install`, no build step, no database.
 
 ```bash
-git clone https://github.com/AurelienBramat/Hackathon-AWS-NFL.git
-cd Hackathon-AWS-NFL
+git clone https://github.com/AurelienBramat/Breakdown.git
+cd Breakdown
 node app/server.js
 # → http://localhost:3000
 ```
