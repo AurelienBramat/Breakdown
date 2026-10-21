@@ -5,376 +5,649 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gridiron Replay</title>
 <style>
-  :root { --bg:#0f1418; --panel:#182027; --line:#2a3640; --text:#e4ebf0; --mute:#8a9aa6; --acc:#f5b82e; --good:#4cc38a; --bad:#e5544b; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.4 system-ui, sans-serif; display:grid; grid-template-columns:320px 1fr 300px; height:100vh; }
-  aside, section { overflow:auto; padding:12px; }
-  aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
-  #right { background:var(--panel); border-left:1px solid var(--line); }
-  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--mute); margin:14px 0 6px; }
-  select, input, button { background:#0f1418; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
-  button { cursor:pointer; } button:hover { border-color:var(--acc); } button.on { background:var(--acc); color:#000; }
-  #plays { flex:1; overflow:auto; }
-  .play { padding:6px 8px; border-bottom:1px solid var(--line); cursor:pointer; }
-  .play:hover, .play.sel { background:#22303a; }
-  .play b { color:var(--acc); } .play small { color:var(--mute); display:block; }
-  #field { width:100%; display:block; border-radius:8px; cursor:crosshair; }
-  #bar { display:flex; gap:6px; align-items:center; margin:10px 0 4px; flex-wrap:wrap; }
-  #scrub { flex:1; min-width:200px; }
-  #ticks { position:relative; height:18px; margin:0 0 6px; }
-  #ticks span { position:absolute; font-size:10px; color:var(--mute); transform:translateX(-50%); white-space:nowrap; border-left:1px solid var(--acc); padding-left:3px; }
-  #desc { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; margin-top:8px; }
-  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; } .kv span:nth-child(odd) { color:var(--mute); }
-  .barrow { display:flex; align-items:center; gap:6px; margin:3px 0; } .barrow i { display:block; height:8px; background:var(--acc); border-radius:4px; }
-  .barrow span:first-child { width:90px; color:var(--mute); }
-  #whatif { border:1px solid var(--acc); border-radius:8px; padding:10px; margin-top:10px; }
-  .hint { color:var(--mute); font-size:12px; }
-  .good { color:var(--good); } .bad { color:var(--bad); }
+  :root { --bg:#0d1216; --panel:#151d23; --panel2:#1b252d; --line:#26333d; --text:#e6edf2; --mute:#8798a5; --acc:#f5b82e; --good:#3fbf7f; --warn:#e8b33a; --bad:#e5544b; }
+  * { box-sizing:border-box; } [hidden] { display:none !important; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.45 system-ui, -apple-system, sans-serif; display:grid; grid-template:auto 1fr / 290px 1fr 360px; }
+  header { grid-column:1/-1; display:flex; align-items:center; gap:16px; padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; letter-spacing:.04em; } header h1 span { color:var(--acc); }
+  aside, main { overflow:auto; min-height:0; }
+  #left { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+  #right { background:var(--panel); border-left:1px solid var(--line); display:flex; flex-direction:column; }
+  main { padding:12px 16px; display:flex; flex-direction:column; gap:10px; }
+  select, input[type=search], button { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font:inherit; }
+  button { cursor:pointer; white-space:nowrap; } button:hover { border-color:var(--acc); }
+  button.on { background:var(--acc); color:#111; border-color:var(--acc); font-weight:600; }
+  button:disabled { opacity:.4; cursor:default; }
+  .muted { color:var(--mute); } .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  h3 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--mute); margin:14px 0 6px; }
+
+  /* scoreboard */
+  #board { display:flex; align-items:center; gap:10px; margin-left:auto; font-weight:600; }
+  .team { display:flex; align-items:center; gap:6px; padding:4px 10px; border-radius:6px; background:var(--panel2); }
+  .team i { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .team b { font-size:17px; } .team.poss { outline:2px solid var(--acc); }
+  .sit { background:var(--panel2); padding:5px 10px; border-radius:6px; }
+  .sit em { color:var(--acc); font-style:normal; }
+
+  /* play list */
+  #filters { padding:10px; display:flex; flex-direction:column; gap:8px; border-bottom:1px solid var(--line); }
+  .chips { display:flex; flex-wrap:wrap; gap:4px; } .chips button { padding:3px 9px; font-size:12px; border-radius:20px; }
+  #plays { overflow:auto; flex:1; }
+  .play { padding:8px 10px; border-bottom:1px solid var(--line); cursor:pointer; display:grid; grid-template-columns:1fr auto; gap:2px 8px; }
+  .play:hover { background:var(--panel2); } .play.sel { background:#24323c; box-shadow:inset 3px 0 var(--acc); }
+  .play .meta { font-weight:600; } .play .d { grid-column:1/-1; color:var(--mute); font-size:12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .badge { font-size:11px; font-weight:700; padding:1px 7px; border-radius:10px; background:#2d3a44; }
+  .badge.gain { background:#1f4a35; color:#7ee2ac; } .badge.big { background:var(--good); color:#06180e; }
+  .badge.loss { background:#4a2020; color:#ff9a92; } .badge.td { background:var(--acc); color:#111; }
+  #count { font-size:12px; }
+
+  /* field + controls */
+  #stage { position:relative; }
+  #field { width:100%; display:block; border-radius:10px; background:#173b22; }
+  #tip { position:absolute; pointer-events:none; background:#000c; padding:4px 8px; border-radius:6px; font-size:12px; display:none; white-space:nowrap; }
+  #modeBadge { position:absolute; top:10px; left:10px; display:flex; gap:0; }
+  #modeBadge button { border-radius:0; background:#000a; } #modeBadge button:first-child { border-radius:7px 0 0 7px; } #modeBadge button:last-child { border-radius:0 7px 7px 0; }
+  #modeBadge button.on { background:var(--acc); }
+  #empty { position:absolute; inset:0; display:grid; place-items:center; color:#cfe; font-size:16px; pointer-events:none; }
+  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  #play { width:46px; font-size:16px; }
+  #timeline { position:relative; flex:1; min-width:240px; height:34px; }
+  #scrub { width:100%; position:absolute; top:0; margin:0; accent-color:var(--acc); }
+  #marks { position:absolute; top:18px; left:0; right:0; height:16px; }
+  #marks span { position:absolute; transform:translateX(-50%); font-size:10px; color:var(--mute); cursor:pointer; white-space:nowrap; }
+  #marks span::before { content:''; position:absolute; left:50%; top:-6px; width:1px; height:5px; background:var(--acc); }
+  #clock { font-variant-numeric:tabular-nums; min-width:92px; text-align:right; }
+  .toggles button { font-size:12px; padding:4px 9px; }
+  .kbd { font-size:11px; }
+
+  /* right tabs */
+  #tabs { display:flex; border-bottom:1px solid var(--line); }
+  #tabs button { flex:1; border:0; border-radius:0; padding:11px; background:transparent; color:var(--mute); font-weight:600; }
+  #tabs button.on { color:var(--acc); background:transparent; box-shadow:inset 0 -2px var(--acc); }
+  .tab { padding:12px 14px; overflow:auto; flex:1; display:none; } .tab.on { display:block; }
+  .desc { font-size:14px; line-height:1.5; }
+  .facts { display:grid; grid-template-columns:auto 1fr; gap:3px 12px; } .facts span:nth-child(odd) { color:var(--mute); }
+  .card { background:var(--panel2); border:1px solid var(--line); border-radius:9px; padding:10px; margin-top:8px; }
+  .barrow { display:grid; grid-template-columns:90px 1fr 38px; align-items:center; gap:6px; margin:4px 0; }
+  .barrow i { display:block; height:8px; background:#3a4954; border-radius:4px; } .barrow i b { display:block; height:100%; background:var(--acc); border-radius:4px; }
+  .barrow.this span:first-child { color:var(--acc); font-weight:700; }
+
+  /* what-if */
+  .step { margin-bottom:14px; } .step > b { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .step > b i { width:20px; height:20px; border-radius:50%; background:var(--acc); color:#111; font-style:normal; display:grid; place-items:center; font-size:12px; }
+  .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:5px; } .grid button { padding:7px 4px; }
+  .recv { display:flex; flex-direction:column; gap:4px; }
+  .recv button { text-align:left; display:flex; justify-content:space-between; }
+  .recv button small { color:inherit; opacity:.7; }
+  .cov button { display:block; width:100%; text-align:left; margin-bottom:4px; } .cov small { display:block; opacity:.75; font-weight:400; }
+  .res { display:grid; grid-template-columns:1fr auto auto; gap:4px 10px; align-items:center; }
+  .verdict { font-size:11px; font-weight:700; padding:1px 7px; border-radius:10px; }
+  .verdict.open { background:var(--good); color:#06180e; } .verdict.tight { background:var(--warn); color:#111; } .verdict.covered { background:var(--bad); color:#fff; }
+  .headline { font-size:15px; font-weight:600; }
 </style>
 </head>
 <body>
-<aside>
+<header>
+  <h1>GRIDIRON <span>REPLAY</span></h1>
   <select id="game"></select>
-  <input id="filter" placeholder="Filter plays (e.g. Brady, deep, sack, Cover-1)">
+  <div id="board"></div>
+</header>
+
+<aside id="left">
+  <div id="filters">
+    <input id="search" type="search" placeholder="Search player, route, coverage…">
+    <div class="chips" id="chips"></div>
+    <div class="chips" id="offChips"></div>
+    <span id="count" class="muted"></span>
+  </div>
   <div id="plays"></div>
 </aside>
 
-<section>
-  <canvas id="field" width="1200" height="533"></canvas>
-  <div id="bar">
-    <button id="playBtn">▶</button>
-    <button id="back">⏮ frame</button><button id="fwd">frame ⏭</button>
-    <input id="scrub" type="range" min="0" value="0">
-    <select id="speed"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option></select>
-    <label><input id="trails" type="checkbox" checked> trails</label>
-    <span id="fr" class="hint"></span>
+<main>
+  <div id="stage">
+    <canvas id="field"></canvas>
+    <div id="modeBadge" hidden><button data-m="real">Original</button><button data-m="sim">What-if</button></div>
+    <div id="empty">← Pick a play to start</div>
+    <div id="tip"></div>
   </div>
-  <div id="ticks"></div>
-  <div id="desc" class="hint">Pick a game and a play.</div>
-
-  <div id="whatif">
-    <b>What-if simulator</b>
-    <p class="hint">1) Click "Edit route", 2) click an offensive player, 3) click on the field to draw the new route (several points). Edit as many players as you like, then run. The defense re-reacts using its coverage and how this team usually plays.</p>
-    <div id="bar">
-      <button id="editBtn">Edit route</button>
-      <button id="undoBtn">Undo point</button>
-      <button id="clearBtn">Clear edits</button>
-      <select id="cov">
-        <option value="played">Defense: as played</option>
-        <option value="tendency">Defense: team tendency</option>
-        <option value="Man">Defense: force man</option>
-        <option value="Zone">Defense: force zone</option>
-      </select>
-      <button id="simBtn">Run simulation</button>
-      <button id="origBtn">Show original</button>
-    </div>
-    <div id="simOut" class="hint"></div>
+  <div class="row">
+    <button id="prev" title="Previous play (P)">⏮</button>
+    <button id="play" title="Play / pause (Space)">▶</button>
+    <button id="next" title="Next play (N)">⏭</button>
+    <button id="toSnap" title="Jump to snap (S)">Snap</button>
+    <button id="toThrow" title="Jump to throw (T)">Throw</button>
+    <div id="timeline"><input id="scrub" type="range" min="0" value="0"><div id="marks"></div></div>
+    <span id="clock" class="muted"></span>
+    <span class="chips" id="speeds"></span>
   </div>
-</section>
+  <div class="row toggles">
+    <span class="muted">Show:</span>
+    <button data-o="names">Names</button>
+    <button data-o="routes" class="on">Route chart</button>
+    <button data-o="sep" class="on">Who's open</button>
+    <button data-o="trails">Trails</button>
+    <button data-o="full">Full field</button>
+    <span class="muted kbd" style="margin-left:auto">Keys: Space play · ←/→ frame · S snap · T throw · N/P play</span>
+  </div>
+  <div id="results"></div>
+</main>
 
 <aside id="right">
-  <h2>Selected player</h2><div id="player" class="hint">Click a player on the field.</div>
-  <h2 id="tendTitle">Defensive tendencies</h2><div id="tend" class="hint">—</div>
+  <div id="tabs"><button data-t="play" class="on">Play</button><button data-t="whatif">What-if</button><button data-t="defense">Defense</button></div>
+  <div class="tab on" id="tab-play"><p class="muted">Pick a play from the list.</p></div>
+  <div class="tab" id="tab-whatif"><p class="muted">Pick a play first, then change a route here and watch how the defense reacts.</p></div>
+  <div class="tab" id="tab-defense"><p class="muted">Pick a play to see how this defense usually plays.</p></div>
 </aside>
 
 <script>
-const $ = s => document.querySelector(s);
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const cv = $('#field'), ctx = cv.getContext('2d');
-const K = 10, W = 53.3; // px per yard, field width
-const COLORS = { ARI:'#97233F',ATL:'#A71930',BAL:'#5b3fb5',BUF:'#00338D',CAR:'#0085CA',CHI:'#C83803',CIN:'#FB4F14',CLE:'#FF3C00',DAL:'#4a7bd0',DEN:'#FB4F14',DET:'#0076B6',GB:'#2f7d4f',HOU:'#A71930',IND:'#2a6fd6',JAX:'#006778',KC:'#E31837',LA:'#003594',LAC:'#0080C6',LV:'#A5ACAF',MIA:'#008E97',MIN:'#6b3fb0',NE:'#3a5a9a',NO:'#D3BC8D',NYG:'#0B2265',NYJ:'#125740',PHI:'#004C54',PIT:'#FFB612',SEA:'#69BE28',SF:'#AA0000',TB:'#D50A0A',TEN:'#4B92DB',WAS:'#a03a3a' };
-const SNAP = ['ball_snap','autoevent_ballsnap'], END = ['pass_forward','autoevent_passforward','qb_sack','qb_strip_sack','run','fumble'];
+const W = 53.3, DPR = window.devicePixelRatio || 1;
+const COLORS = { ARI:'#97233F',ATL:'#A71930',BAL:'#5b3fb5',BUF:'#1f4fb0',CAR:'#0085CA',CHI:'#C83803',CIN:'#FB4F14',CLE:'#FF3C00',DAL:'#3f72c9',DEN:'#FB4F14',DET:'#0076B6',GB:'#2f7d4f',HOU:'#A71930',IND:'#2a6fd6',JAX:'#006778',KC:'#E31837',LA:'#2d55b5',LAC:'#0080C6',LV:'#8f969a',MIA:'#008E97',MIN:'#6b3fb0',NE:'#3a5a9a',NO:'#b39a5e',NYG:'#2a4aa0',NYJ:'#1d7a55',PHI:'#00707a',PIT:'#d9a000',SEA:'#4f9a1f',SF:'#AA0000',TB:'#D50A0A',TEN:'#4B92DB',WAS:'#a03a3a' };
+const SNAP = ['ball_snap', 'autoevent_ballsnap'], END = ['pass_forward', 'autoevent_passforward', 'qb_sack', 'qb_strip_sack', 'run', 'fumble'];
+const ORD = ['', 'st', 'nd', 'rd', 'th'];
+const OL = ['T', 'G', 'C'];
 
-let cur = null, plays = [], frame = 0, playing = false, last = 0, sel = null;
-let edits = {}, editMode = false, activeEdit = null, sim = null;
+let games = [], plays = [], shown = [], cur = null, frame = 0, playing = false, lastTick = 0, speed = 1;
+let sel = null, hover = null, view = null, filter = 'All', offFilter = 'All', tab = 'play';
+const show = { names: false, routes: true, sep: true, trails: false, full: false };
+const wi = { target: null, edits: {}, drawing: false, cov: 'played', depth: 1, route: {} };
+let sim = null, viewSim = false;
 
-const api = (p) => fetch(p).then(r => r.json());
+const api = p => fetch(p).then(r => r.json());
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-const px = (x, y) => [x * K, (W - y) * K];
-const toYd = (cx, cy) => [cx / K, W - cy / K];
+const pct = (a, n) => Math.round(100 * a / Math.max(n, 1));
+const last = n => (n || '').split(' ').slice(-1)[0];
+const isTD = p => /TOUCHDOWN/.test(p.playDescription);
 
-// ---------- loading ----------
+// ================= games & play list =================
 api('/api/games').then(gs => {
-  $('#game').innerHTML = gs.map(g => `<option value="${g.gameId}">Wk ${g.week} · ${g.visitorTeamAbbr} @ ${g.homeTeamAbbr} · ${g.gameDate}</option>`).join('');
+  games = gs;
+  $('#game').innerHTML = gs.map(g => `<option value="${g.gameId}">Week ${g.week} · ${g.visitorTeamAbbr} @ ${g.homeTeamAbbr}</option>`).join('');
   loadGame();
 });
 $('#game').onchange = loadGame;
-$('#filter').oninput = renderPlayList;
+$('#search').oninput = renderList;
+
+const FILTERS = {
+  All: () => true,
+  '3rd down': p => p.down === 3,
+  'Red zone': p => p.yardlineSide !== p.possessionTeam && p.yardlineNumber <= 20,
+  'Big play 20+': p => p.playResult >= 20,
+  TD: isTD,
+  Sack: p => p.passResult === 'S',
+  INT: p => p.passResult === 'IN',
+  Incomplete: p => p.passResult === 'I',
+};
+$('#chips').innerHTML = Object.keys(FILTERS).map(k => `<button data-f="${k}" class="${k === filter ? 'on' : ''}">${k}</button>`).join('');
+$('#chips').onclick = e => { if (e.target.dataset.f) { filter = e.target.dataset.f; $$('#chips button').forEach(b => b.classList.toggle('on', b === e.target)); renderList(); } };
+$('#offChips').onclick = e => { if (e.target.dataset.f) { offFilter = e.target.dataset.f; $$('#offChips button').forEach(b => b.classList.toggle('on', b === e.target)); renderList(); } };
 
 async function loadGame() {
-  plays = await api('/api/plays?game=' + $('#game').value);
-  plays.sort((a, b) => a.playId - b.playId);
-  renderPlayList();
+  plays = (await api('/api/plays?game=' + $('#game').value)).sort((a, b) => a.quarter - b.quarter || b.gameClock.localeCompare(a.gameClock) || a.playId - b.playId);
+  const g = games.find(g => g.gameId == $('#game').value);
+  offFilter = 'All';
+  $('#offChips').innerHTML = ['All', g.visitorTeamAbbr, g.homeTeamAbbr].map(t => `<button data-f="${t}" class="${t === 'All' ? 'on' : ''}">${t === 'All' ? 'Both offenses' : t + ' offense'}</button>`).join('');
+  renderList();
+  if (shown[0]) loadPlay(shown[0].playId);
 }
-function renderPlayList() {
-  const q = $('#filter').value.toLowerCase();
-  $('#plays').innerHTML = plays.filter(p => !q || JSON.stringify(p).toLowerCase().includes(q)).map(p =>
-    `<div class="play" data-id="${p.playId}"><b>Q${p.quarter} ${p.gameClock}</b> · ${p.down}&${p.yardsToGo} · ${p.possessionTeam} ${p.playResult >= 0 ? '+' : ''}${p.playResult}
-     <small>${p.playDescription}</small></div>`).join('');
-  document.querySelectorAll('.play').forEach(d => d.onclick = () => loadPlay(+d.dataset.id, d));
+function badge(p) {
+  if (isTD(p)) return '<span class="badge td">TD</span>';
+  if (p.passResult === 'IN') return '<span class="badge loss">INT</span>';
+  if (p.passResult === 'S') return `<span class="badge loss">SACK ${p.playResult}</span>`;
+  if (p.passResult === 'I' && !p.playResult) return '<span class="badge">INC</span>';
+  const y = p.playResult;
+  return `<span class="badge ${y >= 20 ? 'big' : y > 0 ? 'gain' : y < 0 ? 'loss' : ''}">${y > 0 ? '+' : ''}${y} yds</span>`;
 }
-async function loadPlay(id, el) {
-  document.querySelectorAll('.play.sel').forEach(d => d.classList.remove('sel')); el?.classList.add('sel');
-  cur = await api(`/api/play?game=${$('#game').value}&play=${id}`);
-  if (!cur) return;
-  const ev = Object.entries(cur.events);
-  cur.S = +(ev.find(([, e]) => SNAP.includes(e))?.[0] ?? 0);
-  cur.E = +(ev.find(([f, e]) => +f > cur.S && END.includes(e))?.[0] ?? cur.nFrames - 1);
-  cur.sgn = cur.dir === 'right' ? 1 : -1;
-  for (const e of cur.ents) for (let f = 0; f < cur.nFrames; f++) e.f[f] ||= e.f[f - 1] || e.f.find(Boolean);
-  edits = {}; sim = null; sel = null; frame = 0; playing = false; editMode = false;
-  $('#editBtn').classList.remove('on'); $('#simOut').textContent = '';
+function renderList() {
+  const q = $('#search').value.toLowerCase();
+  shown = plays.filter(p => FILTERS[filter](p) && (offFilter === 'All' || p.possessionTeam === offFilter) && (!q || JSON.stringify(p).toLowerCase().includes(q)));
+  $('#count').textContent = `${shown.length} of ${plays.length} pass plays`;
+  $('#plays').innerHTML = shown.map(p => `<div class="play ${cur?.play.playId === p.playId ? 'sel' : ''}" data-id="${p.playId}">
+    <span class="meta">Q${p.quarter} ${p.gameClock} · ${p.down}${ORD[p.down]} & ${p.yardsToGo} · ${p.possessionTeam}</span>${badge(p)}
+    <span class="d">${p.playDescription.replace(/^\(\d+:\d+\)\s*/, '')}</span></div>`).join('');
+}
+$('#plays').onclick = e => { const d = e.target.closest('.play'); if (d) loadPlay(+d.dataset.id); };
+
+// ================= load + normalise a play (offense always attacks left → right) =================
+async function loadPlay(id) {
+  const data = await api(`/api/play?game=${$('#game').value}&play=${id}`);
+  if (!data) return;
+  const flip = data.dir === 'left';
+  for (const e of data.ents) {
+    for (let f = 0; f < data.nFrames; f++) e.f[f] ||= e.f[f - 1] || e.f.find(Boolean);
+    if (flip) e.f = e.f.map(p => [120 - p[0], W - p[1], p[2], (p[3] + 180) % 360, (p[4] + 180) % 360]);
+    e.off = e.team === data.play.possessionTeam;
+  }
+  cur = data;
+  cur.los = flip ? 120 - data.play.absoluteYardlineNumber : data.play.absoluteYardlineNumber;
+  const ev = Object.entries(cur.events).map(([f, e]) => [+f, e]);
+  cur.S = ev.find(([, e]) => SNAP.includes(e))?.[0] ?? 0;
+  cur.E = ev.find(([f, e]) => f > cur.S && END.includes(e))?.[0] ?? cur.nFrames - 1;
+  cur.endEvent = cur.events[cur.E] || 'end';
+  cur.tend = await api('/api/team?t=' + cur.play.defensiveTeam);
+  sel = hover = null; wi.target = null; wi.edits = {}; wi.route = {}; wi.drawing = false; wi.cov = 'played'; sim = null; viewSim = false;
+  frame = 0; playing = true;
+  computeView(); renderList(); renderBoard(); renderPlayTab(); renderDefenseTab(); renderWhatIf(); renderMarks(); updateModeBadge(); draw();
+  $('#empty').hidden = true;
+  $('#toThrow').textContent = /sack/.test(cur.endEvent) ? 'Sack' : 'Throw';
+}
+function step(d) { const i = shown.findIndex(p => p.playId === cur?.play.playId); const p = shown[i + d]; if (p) { loadPlay(p.playId); $(`.play[data-id="${p.playId}"]`)?.scrollIntoView({ block: 'nearest' }); } }
+
+// ================= header scoreboard =================
+function renderBoard() {
+  const p = cur.play, g = games.find(g => g.gameId === p.gameId);
+  const t = (abbr, score) => `<span class="team ${abbr === p.possessionTeam ? 'poss' : ''}"><i style="background:${COLORS[abbr]}"></i>${abbr} <b>${score}</b></span>`;
+  $('#board').innerHTML = t(g.visitorTeamAbbr, p.preSnapVisitorScore) + t(g.homeTeamAbbr, p.preSnapHomeScore) +
+    `<span class="sit">Q${p.quarter} · ${p.gameClock}</span><span class="sit"><em>${p.down}${ORD[p.down]} & ${p.yardsToGo}</em> · ball on ${p.yardlineSide || ''} ${p.yardlineNumber}</span>
+     <span class="sit">${p.possessionTeam} ball →</span>`;
+}
+
+// ================= right panel: Play =================
+function renderPlayTab() {
   const p = cur.play;
-  $('#desc').innerHTML = `<b>${p.possessionTeam} vs ${p.defensiveTeam}</b> · Q${p.quarter} ${p.gameClock} · ${p.down}&${p.yardsToGo} at ${p.yardlineSide} ${p.yardlineNumber}<br>${p.playDescription}
-    <div class="kv" style="margin-top:6px"><span>Formation</span><span>${p.offenseFormation} · ${p.personnelO}</span>
-    <span>Defense</span><span>${p.personnelD} · ${p.defendersInBox} in box</span>
-    <span>Coverage</span><span>${p.pff_passCoverage} (${p.pff_passCoverageType})</span>
-    <span>Dropback</span><span>${p.dropBackType}${p.pff_playAction ? ' · play action' : ''}</span>
-    <span>Result</span><span>${p.passResult || '-'} · ${p.playResult} yds</span></div>`;
-  $('#ticks').innerHTML = ev.map(([f, e]) => `<span style="left:${f / (cur.nFrames - 1) * 100}%">${e.replace('autoevent_', '').replace(/_/g, ' ')}</span>`).join('');
-  loadTendencies(p);
-  setRange(); draw();
+  const pressure = cur.ents.filter(e => e.hit || e.hurry || e.sack).map(e => `#${e.jersey} ${e.name} (${[e.sack && 'sack', e.hit && 'hit', e.hurry && 'hurry'].filter(Boolean).join(', ')})`);
+  const beaten = cur.ents.filter(e => e.beaten).map(e => `#${e.jersey} ${e.name}`);
+  const rushers = cur.ents.filter(e => e.role === 'Pass Rush').length;
+  const tt = ((cur.E - cur.S) / 10).toFixed(1);
+  $('#tab-play').innerHTML = `<div class="desc">${p.playDescription}</div>
+    <h3>Pre-snap</h3><div class="facts">
+      <span>Formation</span><span>${p.offenseFormation || '-'} · ${p.personnelO || '-'}</span>
+      <span>Defense</span><span>${p.personnelD || '-'} · ${p.defendersInBox ?? '-'} in the box</span>
+      <span>Coverage</span><span><b>${p.pff_passCoverage || '-'}</b> (${p.pff_passCoverageType || '-'})</span></div>
+    <h3>The rep</h3><div class="facts">
+      <span>Dropback</span><span>${(p.dropBackType || '-').toLowerCase().replace(/_/g, ' ')}${p.pff_playAction ? ' · play action' : ''}</span>
+      <span>Rushers</span><span>${rushers}${rushers >= 5 ? ' (blitz)' : ''}</span>
+      <span>Time to ${/sack/.test(cur.endEvent) ? 'sack' : 'throw'}</span><span>${tt}s ${tt < 2.5 ? '<span class="good">quick</span>' : tt > 3.2 ? '<span class="warn">long hold</span>' : ''}</span>
+      <span>Pressure</span><span>${pressure.join('<br>') || '<span class="good">clean pocket</span>'}</span>
+      ${beaten.length ? `<span>Beaten blocks</span><span class="bad">${beaten.join('<br>')}</span>` : ''}</div>
+    <div id="pcard"></div>`;
+  renderPlayerCard();
 }
-
-// ---------- team tendencies ("how they usually play") ----------
-async function loadTendencies(p) {
-  const t = await api('/api/team?t=' + p.defensiveTeam);
-  cur.tend = t;
-  const b = t.all, d = t.byDown[p.down] || b;
-  const pct = (a, n) => Math.round(100 * a / Math.max(n, 1));
-  const covs = Object.entries(b.cov).sort((a, c) => c[1] - a[1]).slice(0, 6);
-  $('#tendTitle').textContent = `${p.defensiveTeam} defense (weeks 1-8)`;
-  $('#tend').innerHTML = `<div class="kv"><span>Pass plays</span><span>${b.n}</span>
-    <span>Man / Zone</span><span>${pct(b.man, b.n)}% / ${pct(b.zone, b.n)}%</span>
-    <span>On ${p.down}${['', 'st', 'nd', 'rd', 'th'][p.down]} down</span><span>${pct(d.man, d.n)}% man (${d.n} plays)</span>
-    <span>Avg rushers</span><span>${(b.rush / b.n).toFixed(1)}</span>
-    <span>Blitz (5+)</span><span>${pct(b.blitz, b.n)}%</span>
-    <span>Avg in box</span><span>${(b.box / b.n).toFixed(1)}</span></div>
-    <h2>Coverage calls</h2>` + covs.map(([c, n]) =>
-    `<div class="barrow"><span>${c}</span><i style="width:${pct(n, b.n) * 1.5}px"></i>${pct(n, b.n)}%</div>`).join('');
-}
-function tendencyCoverage() {
-  const d = cur.tend.byDown[cur.play.down] || cur.tend.all;
-  return d.man / Math.max(d.man + d.zone, 1) >= 0.5 ? 'Man' : 'Zone';
-}
-
-// ---------- drawing ----------
-function pos(e, f) { return sim?.pos[e.id]?.[f] || e.f[f]; }
-function drawField() {
-  ctx.fillStyle = '#2f6b3a'; ctx.fillRect(0, 0, cv.width, cv.height);
-  for (let i = 0; i < 10; i++) if (i % 2) { ctx.fillStyle = '#336f3e'; ctx.fillRect((10 + i * 10) * K, 0, 10 * K, cv.height); }
-  ctx.fillStyle = '#25522e'; ctx.fillRect(0, 0, 10 * K, cv.height); ctx.fillRect(110 * K, 0, 10 * K, cv.height);
-  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1;
-  for (let x = 10; x <= 110; x += 5) { ctx.beginPath(); ctx.moveTo(x * K, 0); ctx.lineTo(x * K, cv.height); ctx.stroke(); }
-  ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.font = 'bold 22px system-ui'; ctx.textAlign = 'center';
-  for (let i = 1; i < 10; i++) { const n = Math.min(i, 10 - i) * 10; ctx.fillText(n, (10 + i * 10) * K, 12 * K); ctx.fillText(n, (10 + i * 10) * K, (W - 10) * K); }
-  for (let x = 11; x < 110; x++) for (const y of [23.6, 29.7]) { ctx.fillRect(x * K - 0.5, (W - y) * K - 4, 1, 8); }
-  if (!cur) return;
-  const los = cur.play.absoluteYardlineNumber;
-  ctx.lineWidth = 3; ctx.strokeStyle = '#3d8bff'; ctx.beginPath(); ctx.moveTo(los * K, 0); ctx.lineTo(los * K, cv.height); ctx.stroke();
-  const fd = los + cur.sgn * cur.play.yardsToGo;
-  ctx.strokeStyle = '#ffd400'; ctx.beginPath(); ctx.moveTo(fd * K, 0); ctx.lineTo(fd * K, cv.height); ctx.stroke();
-}
-function draw() {
-  drawField();
-  if (!cur) return;
-  $('#fr').textContent = `frame ${frame + 1}/${maxFrame() + 1} · ${(frame / 10).toFixed(1)}s` + (sim ? ' · SIMULATED' : '');
-  $('#scrub').value = frame;
-  // ghosts of the original positions for anything the simulation moved
-  if (sim) for (const e of cur.ents) if (sim.pos[e.id]) {
-    const [x, y] = px(...e.f[frame]); ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.setLineDash([3, 3]);
-    ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.stroke(); ctx.setLineDash([]);
-  }
-  // drawn routes
-  for (const [id, pts] of Object.entries(edits)) {
-    const e = cur.ents.find(e => e.id === id), start = e.f[cur.S];
-    ctx.strokeStyle = id === activeEdit && editMode ? '#f5b82e' : 'rgba(245,184,46,.6)'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
-    ctx.beginPath(); ctx.moveTo(...px(start[0], start[1])); pts.forEach(p => ctx.lineTo(...px(...p))); ctx.stroke(); ctx.setLineDash([]);
-  }
-  for (const e of cur.ents) {
-    if ($('#trails').checked && e.id !== 'ball') {
-      ctx.strokeStyle = e.id === sel ? '#fff' : 'rgba(255,255,255,.25)'; ctx.lineWidth = e.id === sel ? 2 : 1; ctx.beginPath();
-      for (let f = Math.max(0, frame - 30); f <= frame; f++) ctx.lineTo(...px(...pos(e, f)));
-      ctx.stroke();
-    }
-    const [x, y] = px(...pos(e, frame));
-    if (e.id === 'ball') { ctx.fillStyle = '#8b4a1c'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.ellipse(x, y, 6, 4, 0, 0, 7); ctx.fill(); ctx.stroke(); continue; }
-    const o = pos(e, frame)[3] * Math.PI / 180; // NGS orientation: 0 = +y, clockwise
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.sin(o) * 14, y - Math.cos(o) * 14); ctx.stroke();
-    ctx.fillStyle = COLORS[e.team] || '#888'; ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fill();
-    ctx.lineWidth = e.id === sel ? 3 : 1.5; ctx.strokeStyle = e.id === sel ? '#f5b82e' : e.team === cur.play.possessionTeam ? '#fff' : '#111'; ctx.stroke();
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(e.jersey ?? '', x, y + 0.5);
-  }
-  showPlayer();
-}
-function showPlayer() {
+function renderPlayerCard() {
+  const el = $('#pcard'); if (!el) return;
   const e = cur?.ents.find(e => e.id === sel);
-  if (!e) return;
+  if (!e) { el.innerHTML = '<p class="muted" style="margin-top:14px">Tip: click any player on the field for his details.</p>'; return; }
   const p = pos(e, frame), max = Math.max(...e.f.map(f => f[2]));
-  const blocked = cur.ents.find(x => x.id == e.blocked);
-  const yn = v => v == null ? '-' : v ? 'yes' : 'no';
-  $('#player').innerHTML = `<b style="font-size:15px">#${e.jersey} ${e.name}</b><div class="kv" style="margin-top:6px">
-    <span>Team</span><span>${e.team}</span><span>Position</span><span>${e.pos}</span>
-    <span>PFF role</span><span>${e.role || '-'} (${e.lined || '-'})</span>
-    <span>Speed now</span><span>${p[2].toFixed(1)} yd/s</span><span>Max speed</span><span>${max.toFixed(1)} yd/s</span>
-    <span>Separation</span><span>${separation(e, frame)?.toFixed(1) ?? '-'} yds</span>
-    ${e.role === 'Pass Rush' ? `<span>Hit / Hurry / Sack</span><span>${yn(e.hit)} / ${yn(e.hurry)} / ${yn(e.sack)}</span>` : ''}
-    ${e.role === 'Pass Block' ? `<span>Blocking</span><span>${blocked?.name || '-'}</span><span>Beaten</span><span>${yn(e.beaten)}</span>` : ''}</div>`;
+  const blocked = cur.ents.find(x => x.id == e.blocked), s = separation(e, frame);
+  el.innerHTML = `<div class="card"><b style="font-size:15px">#${e.jersey} ${e.name}</b> <span class="muted">${e.pos} · ${e.team}</span>
+    <div class="facts" style="margin-top:6px">
+    <span>Job</span><span>${e.role || '-'} (lined up ${e.lined || '-'})</span>
+    <span>Speed</span><span>${(p[2] * 2.045).toFixed(1)} mph now · top ${(max * 2.045).toFixed(1)} mph</span>
+    <span>Nearest opponent</span><span>${s?.toFixed(1) ?? '-'} yds</span>
+    ${blocked ? `<span>Blocking</span><span>#${blocked.jersey} ${blocked.name}${e.beaten ? ' <span class="bad">(beaten)</span>' : ''}</span>` : ''}</div></div>`;
 }
-// distance to closest opponent
+
+// ================= right panel: Defense tendencies =================
+function renderDefenseTab() {
+  const p = cur.play, b = cur.tend.all, d = cur.tend.byDown[p.down] || b;
+  const covs = Object.entries(b.cov).sort((a, c) => c[1] - a[1]);
+  $('#tab-defense').innerHTML = `<div class="headline">${p.defensiveTeam} defense</div><p class="muted" style="margin:2px 0 0">${b.n} pass plays, weeks 1–8 of 2021</p>
+    <div class="card"><div class="facts">
+      <span>Man / zone</span><span><b>${pct(b.man, b.n)}%</b> man · <b>${pct(b.zone, b.n)}%</b> zone</span>
+      <span>On ${p.down}${ORD[p.down]} down</span><span>${pct(d.man, d.n)}% man (${d.n} plays)</span>
+      <span>Rushers</span><span>${(b.rush / b.n).toFixed(1)} on average</span>
+      <span>Blitz rate</span><span>${pct(b.blitz, b.n)}% bring 5+</span>
+      <span>Box</span><span>${(b.box / b.n).toFixed(1)} defenders on average</span></div></div>
+    <h3>Coverage calls (this play highlighted)</h3>` +
+    covs.map(([c, n]) => `<div class="barrow ${c === p.pff_passCoverage ? 'this' : ''}"><span>${c}</span><i><b style="width:${pct(n, covs[0][1])}%"></b></i><span>${pct(n, b.n)}%</span></div>`).join('');
+}
+
+// ================= camera =================
+function computeView() {
+  if (show.full || !cur) { view = { x0: -2, y0: -3.35, w: 124 }; return; }
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  for (const e of cur.ents) if (e.id !== 'ball') for (const p of e.f) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
+  const w = Math.min(124, Math.max(44, x1 - x0 + 14, (y1 - y0 + 8) * 2)), h = w / 2;
+  const cx = Math.max(w / 2 - 2, Math.min(122 - w / 2, (x0 + x1) / 2)), cy = h >= W + 6 ? W / 2 : Math.max(h / 2 - 3, Math.min(W + 3 - h / 2, (y0 + y1) / 2));
+  view = { x0: cx - w / 2, y0: cy - h / 2, w };
+}
+function resize() { cv.width = cv.clientWidth * DPR; cv.height = cv.width / 2; draw(); }
+new ResizeObserver(resize).observe(cv);
+const k = () => cv.width / view.w;
+const px = (x, y) => [(x - view.x0) * k(), (view.y0 + view.w / 2 - y) * k()];
+const toYd = (cx, cy) => [cx / k() + view.x0, view.y0 + view.w / 2 - cy / k()];
+
+// ================= drawing =================
+const pos = (e, f) => (viewSim && sim?.pos[e.id]?.[f]) || e.f[f];
+const maxFrame = () => viewSim ? cur.E : cur.nFrames - 1;
 function separation(e, f) {
-  const me = pos(e, f);
-  const opp = cur.ents.filter(o => o.id !== 'ball' && o.team !== e.team);
+  const me = pos(e, f), opp = cur.ents.filter(o => o.id !== 'ball' && o.off !== e.off);
   return opp.length ? Math.min(...opp.map(o => dist(me, pos(o, f)))) : null;
 }
+const sepColor = s => s >= 3 ? '#3fbf7f' : s >= 1.5 ? '#e8b33a' : '#e5544b';
+function line(x, color, w) { ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(...px(x, 0)); ctx.lineTo(...px(x, W)); ctx.stroke(); }
 
-// ---------- playback ----------
-const maxFrame = () => sim ? cur.E : cur.nFrames - 1;
-function setRange() { $('#scrub').max = maxFrame(); }
-$('#scrub').oninput = e => { frame = +e.target.value; draw(); };
-$('#playBtn').onclick = () => { if (!cur) return; if (frame >= maxFrame()) frame = 0; playing = !playing; $('#playBtn').textContent = playing ? '⏸' : '▶'; };
-$('#back').onclick = () => { frame = Math.max(0, frame - 1); draw(); };
-$('#fwd').onclick = () => { if (cur) { frame = Math.min(maxFrame(), frame + 1); draw(); } };
-$('#trails').onchange = draw;
+function drawField() {
+  ctx.fillStyle = '#173b22'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const [fx, fy] = px(0, W), u = k();
+  for (let i = 0; i < 12; i++) { ctx.fillStyle = i === 0 || i === 11 ? '#1f5530' : i % 2 ? '#2c6b3b' : '#2f713f'; ctx.fillRect(fx + i * 10 * u, fy, 10 * u + 1, W * u); }
+  ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.font = `bold ${2.2 * u}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (cur) { ctx.save(); ctx.translate(...px(5, W / 2)); ctx.rotate(-Math.PI / 2); ctx.fillText(cur.play.possessionTeam, 0, 0); ctx.restore();
+    ctx.save(); ctx.translate(...px(115, W / 2)); ctx.rotate(Math.PI / 2); ctx.fillText(cur.play.defensiveTeam, 0, 0); ctx.restore(); }
+  for (let x = 10; x <= 110; x += 5) line(x, 'rgba(255,255,255,.5)', x % 10 ? 1 : 1.6 * DPR);
+  ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.font = `bold ${1.9 * u}px system-ui`;
+  for (let i = 1; i < 10; i++) { const n = Math.min(i, 10 - i) * 10; ctx.fillText(n, ...px(10 + i * 10, 12)); ctx.fillText(n, ...px(10 + i * 10, W - 12)); }
+  ctx.fillStyle = 'rgba(255,255,255,.55)';
+  for (let x = 11; x < 110; x++) for (const y of [0.6, 23.6, 29.7, W - 0.6]) { const [a, b] = px(x, y); ctx.fillRect(a - DPR / 2, b - 0.35 * u, DPR, 0.7 * u); }
+  if (!cur) return;
+  line(cur.los, '#3d8bff', 2.5 * DPR);
+  if (cur.los + cur.play.yardsToGo < 110) line(cur.los + cur.play.yardsToGo, '#ffd400', 2.5 * DPR);
+}
+function arrowTo(a, b, color) {
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]), s = 0.9 * k();
+  ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(...b);
+  ctx.lineTo(b[0] - s * Math.cos(ang - 0.45), b[1] - s * Math.sin(ang - 0.45)); ctx.lineTo(b[0] - s * Math.cos(ang + 0.45), b[1] - s * Math.sin(ang + 0.45)); ctx.fill();
+}
+function path(pts, color, width, dash = []) {
+  if (pts.length < 2) return;
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash); ctx.beginPath(); pts.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](...p)); ctx.stroke(); ctx.setLineDash([]);
+  arrowTo(pts[pts.length - 2], pts[pts.length - 1], color);
+}
+
+function draw() {
+  if (!view) computeView();
+  drawField();
+  if (!cur) return;
+  const u = k(), R = Math.max(0.85 * u, 7 * DPR), players = cur.ents.filter(e => e.id !== 'ball');
+  $('#scrub').max = maxFrame(); $('#scrub').value = frame;
+  const t = (frame - cur.S) / 10;
+  $('#clock').textContent = `${t < 0 ? 'pre-snap ' : '+'}${Math.abs(t).toFixed(1)}s`;
+
+  // route chart: whole route from snap to the throw
+  if (show.routes) for (const e of players) if (e.off && (e.role === 'Pass Route' || (viewSim && sim?.pos[e.id]))) {
+    const pts = []; for (let f = cur.S; f <= cur.E; f++) pts.push(px(...pos(e, f)));
+    path(pts, viewSim && sim?.pos[e.id] ? '#f5b82e' : 'rgba(255,255,255,.55)', 2 * DPR);
+  }
+  // planned what-if routes (while editing)
+  if (tab === 'whatif') for (const [id, pts] of Object.entries(wi.edits)) {
+    const e = cur.ents.find(e => e.id === id), all = [e.f[cur.S], ...pts].map(p => px(p[0], p[1]));
+    path(all, '#f5b82e', 2.5 * DPR, [8 * DPR, 6 * DPR]);
+    if (wi.drawing && id === wi.target) pts.forEach(p => { ctx.fillStyle = '#f5b82e'; ctx.beginPath(); ctx.arc(...px(...p), 4 * DPR, 0, 7); ctx.fill(); });
+  }
+  if (show.trails) for (const e of players) {
+    ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = DPR; ctx.beginPath();
+    for (let f = Math.max(0, frame - 25); f <= frame; f++) ctx.lineTo(...px(...pos(e, f))); ctx.stroke();
+  }
+  // ghosts of the original players that the what-if moved
+  if (viewSim && sim) for (const e of players) if (sim.pos[e.id]) {
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.5 * DPR; ctx.setLineDash([3 * DPR, 3 * DPR]);
+    ctx.beginPath(); ctx.arc(...px(...e.f[frame]), R, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+  }
+  // "who's open" rings around route runners after the snap
+  if (show.sep && frame >= cur.S) for (const e of players) if (e.off && (e.role === 'Pass Route' || (viewSim && sim?.pos[e.id]))) {
+    const s = separation(e, frame), [x, y] = px(...pos(e, frame));
+    ctx.strokeStyle = sepColor(s); ctx.lineWidth = 3 * DPR; ctx.beginPath(); ctx.arc(x, y, R + 4 * DPR, 0, 7); ctx.stroke();
+    ctx.fillStyle = sepColor(s); ctx.font = `bold ${11 * DPR}px system-ui`; ctx.textAlign = 'center'; ctx.fillText(s.toFixed(1), x, y - R - 11 * DPR);
+  }
+  for (const e of players) {
+    const p = pos(e, frame), [x, y] = px(p[0], p[1]), o = p[3] * Math.PI / 180;
+    const pick = tab === 'whatif' && canRoute(e);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 * DPR; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.sin(o) * R * 1.7, y - Math.cos(o) * R * 1.7); ctx.stroke();
+    ctx.fillStyle = COLORS[e.team] || '#888'; ctx.beginPath(); ctx.arc(x, y, R, 0, 7); ctx.fill();
+    const hl = e.id === sel || e.id === wi.target && tab === 'whatif';
+    ctx.lineWidth = (hl ? 3.5 : 1.5) * DPR; ctx.strokeStyle = hl ? '#f5b82e' : e.off ? '#fff' : '#0b0b0b'; ctx.stroke();
+    if (pick && e.id !== wi.target && frame <= cur.S + 2) { ctx.setLineDash([2 * DPR, 3 * DPR]); ctx.strokeStyle = '#f5b82e'; ctx.lineWidth = 1.5 * DPR; ctx.beginPath(); ctx.arc(x, y, R + 3 * DPR, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
+    ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.max(9 * DPR, R * 0.95)}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(e.jersey ?? '', x, y + DPR);
+    if (show.names || e.id === sel || e.id === hover) {
+      ctx.font = `600 ${10.5 * DPR}px system-ui`; const n = last(e.name), w = ctx.measureText(n).width;
+      ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(x - w / 2 - 3 * DPR, y + R + 3 * DPR, w + 6 * DPR, 14 * DPR);
+      ctx.fillStyle = '#fff'; ctx.fillText(n, x, y + R + 10 * DPR);
+    }
+  }
+  const b = cur.ents.find(e => e.id === 'ball');
+  if (b) { const [x, y] = px(...pos(b, frame)); ctx.fillStyle = '#8b4a1c'; ctx.strokeStyle = '#fff'; ctx.lineWidth = DPR; ctx.beginPath(); ctx.ellipse(x, y, 6 * DPR, 4 * DPR, 0, 0, 7); ctx.fill(); ctx.stroke(); }
+  if (frame === cur.E && frame > cur.S) {
+    ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillRect(cv.width / 2 - 90 * DPR, 10 * DPR, 180 * DPR, 26 * DPR);
+    ctx.fillStyle = '#f5b82e'; ctx.font = `bold ${13 * DPR}px system-ui`; ctx.textAlign = 'center';
+    ctx.fillText(/sack/.test(cur.endEvent) ? 'SACK' : 'BALL THROWN', cv.width / 2, 23 * DPR);
+  }
+  renderPlayerCard();
+}
+
+// ================= timeline & playback =================
+const EVENT_NAMES = { ball_snap: 'Snap', pass_forward: 'Throw', pass_arrived: 'Arrives', pass_outcome_caught: 'Catch', pass_outcome_incomplete: 'Incomplete', pass_outcome_interception: 'INT', pass_outcome_touchdown: 'TD', qb_sack: 'Sack', qb_strip_sack: 'Strip sack', play_action: 'Play action', man_in_motion: 'Motion', tackle: 'Tackle', out_of_bounds: 'Out of bounds', first_contact: 'Contact', fumble: 'Fumble', touchdown: 'TD', run: 'Scramble' };
+function renderMarks() {
+  const m = maxFrame(), seen = new Set();
+  $('#marks').innerHTML = Object.entries(cur.events).filter(([f, e]) => +f <= m && EVENT_NAMES[e.replace('autoevent_', '').replace('passforward', 'pass_forward').replace('ballsnap', 'ball_snap')])
+    .map(([f, e]) => [f, EVENT_NAMES[e.replace('autoevent_', '').replace('passforward', 'pass_forward').replace('ballsnap', 'ball_snap')]])
+    .filter(([, n]) => !seen.has(n) && seen.add(n))
+    .map(([f, n]) => `<span data-f="${f}" style="left:${f / m * 100}%">${n}</span>`).join('');
+}
+$('#marks').onclick = e => { if (e.target.dataset.f) { frame = +e.target.dataset.f; playing = false; syncPlay(); draw(); } };
+$('#scrub').oninput = e => { frame = +e.target.value; playing = false; syncPlay(); draw(); };
+function syncPlay() { $('#play').textContent = playing ? '⏸' : '▶'; }
+function togglePlay() { if (!cur) return; if (frame >= maxFrame()) frame = viewSim ? cur.S : 0; playing = !playing; syncPlay(); }
+function seek(f) { if (!cur) return; frame = Math.max(0, Math.min(maxFrame(), f)); playing = false; syncPlay(); draw(); }
+$('#play').onclick = togglePlay;
+$('#prev').onclick = () => step(-1); $('#next').onclick = () => step(1);
+$('#toSnap').onclick = () => seek(cur.S); $('#toThrow').onclick = () => seek(cur.E);
+$('#speeds').innerHTML = [0.25, 0.5, 1, 2].map(s => `<button data-s="${s}" class="${s === 1 ? 'on' : ''}">${s}×</button>`).join('');
+$('#speeds').onclick = e => { if (e.target.dataset.s) { speed = +e.target.dataset.s; $$('#speeds button').forEach(b => b.classList.toggle('on', b === e.target)); } };
+$$('.toggles button[data-o]').forEach(b => b.onclick = () => { show[b.dataset.o] = !show[b.dataset.o]; b.classList.toggle('on'); if (b.dataset.o === 'full') computeView(); draw(); });
 function tick(t) {
-  if (playing && cur && t - last > 100 / +$('#speed').value) {
-    last = t; frame++;
-    if (frame >= maxFrame()) { frame = maxFrame(); playing = false; $('#playBtn').textContent = '▶'; }
+  if (playing && cur && t - lastTick > 100 / speed) {
+    lastTick = t; frame++;
+    if (frame >= maxFrame()) { frame = maxFrame(); playing = false; syncPlay(); }
     draw();
   }
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
+document.onkeydown = e => {
+  if (e.target.tagName === 'INPUT' && e.target.type === 'search') return;
+  const map = { ' ': togglePlay, ArrowLeft: () => seek(frame - 1), ArrowRight: () => seek(frame + 1), s: () => seek(cur.S), t: () => seek(cur.E), n: () => step(1), p: () => step(-1) };
+  const fn = map[e.key.length === 1 ? e.key.toLowerCase() : e.key]; if (fn && cur) { e.preventDefault(); fn(); }
+};
 
-// ---------- clicking: select players / draw routes ----------
+// ================= tabs =================
+$('#tabs').onclick = e => { const t = e.target.dataset.t; if (!t) return; setTab(t); };
+function setTab(t) {
+  tab = t; $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t)); $$('.tab').forEach(d => d.classList.toggle('on', d.id === 'tab-' + t));
+  if (t === 'whatif' && cur && !sim) seek(cur.S);
+  if (cur) renderResults();
+  draw();
+}
+
+// ================= field mouse: hover names, select players, draw routes =================
+function hitAt(ev) {
+  const r = cv.getBoundingClientRect(), yd = toYd((ev.clientX - r.left) * DPR, (ev.clientY - r.top) * DPR);
+  const e = cur?.ents.filter(e => e.id !== 'ball').sort((a, b) => dist(pos(a, frame), yd) - dist(pos(b, frame), yd))[0];
+  return { yd, e: e && dist(pos(e, frame), yd) < Math.max(1.2, 9 / k() * DPR) ? e : null, r };
+}
+cv.onmousemove = ev => {
+  if (!cur) return;
+  const { e, r } = hitAt(ev), tip = $('#tip');
+  cv.style.cursor = wi.drawing && tab === 'whatif' ? 'crosshair' : e ? 'pointer' : 'default';
+  if (e?.id !== hover) { hover = e?.id ?? null; if (!playing) draw(); }
+  if (e) { tip.style.display = 'block'; tip.style.left = ev.clientX - r.left + 14 + 'px'; tip.style.top = ev.clientY - r.top + 10 + 'px'; tip.innerHTML = `#${e.jersey} <b>${e.name}</b> · ${e.pos} · ${e.role || ''}`; }
+  else tip.style.display = 'none';
+};
+cv.onmouseleave = () => { $('#tip').style.display = 'none'; hover = null; };
 cv.onclick = ev => {
   if (!cur) return;
-  const r = cv.getBoundingClientRect();
-  const yd = toYd((ev.clientX - r.left) * cv.width / r.width, (ev.clientY - r.top) * cv.height / r.height);
-  const hit = cur.ents.filter(e => e.id !== 'ball').find(e => dist(pos(e, frame), yd) < 1.3);
-  if (editMode) {
-    if (hit && hit.team === cur.play.possessionTeam && hit.role !== 'Pass') { activeEdit = sel = hit.id; edits[hit.id] ||= []; }
-    else if (activeEdit) edits[activeEdit].push(yd);
-  } else sel = hit?.id ?? null;
+  const { e, yd } = hitAt(ev);
+  if (tab === 'whatif' && wi.drawing && wi.target && !(e && canRoute(e) && e.id !== wi.target)) { (wi.edits[wi.target] ||= []).push(yd); wi.route[wi.target] = 'Custom'; rerun(); return; }
+  if (tab === 'whatif' && e && canRoute(e)) { wi.target = e.id; wi.drawing = false; renderWhatIf(); draw(); return; }
+  sel = e?.id ?? null;
+  if (sel && tab !== 'play') setTab('play');
   draw();
-};
-$('#editBtn').onclick = () => {
-  if (!cur) return;
-  editMode = !editMode; $('#editBtn').classList.toggle('on', editMode);
-  if (editMode) { sim = null; setRange(); frame = cur.S; playing = false; }
-  draw();
-};
-$('#undoBtn').onclick = () => { edits[activeEdit]?.pop(); draw(); };
-$('#clearBtn').onclick = () => { edits = {}; sim = null; activeEdit = null; setRange(); $('#simOut').textContent = ''; draw(); };
-$('#origBtn').onclick = () => { sim = null; setRange(); draw(); };
-$('#simBtn').onclick = () => {
-  if (!cur) return;
-  editMode = false; $('#editBtn').classList.remove('on');
-  sim = simulate($('#cov').value); setRange(); frame = cur.S; playing = true; $('#playBtn').textContent = '⏸';
-  report(); draw();
 };
 
-// ---------- the what-if engine ----------
-// Offense: edited players run the drawn route with a realistic speed profile. Everyone else keeps real tracking.
+// ================= what-if panel =================
+const canRoute = e => e.off && e.role !== 'Pass' && !OL.includes(e.pos);
+// route tree: [downfield yds, outside yds] waypoints relative to the receiver's spot at the snap
+const ROUTES = {
+  Hitch: [[6, 0], [4.5, 0]], Slant: [[3, 0], [11, -7]], Flat: [[1, 1], [3, 9]],
+  Out: [[10, 0], [10, 9]], Dig: [[12, 0], [12, -14]], Curl: [[12, 0], [10, -1.5]],
+  Comeback: [[15, 0], [12, 4]], Post: [[12, 0], [30, -11]], Corner: [[12, 0], [27, 10]],
+  Go: [[35, 0]], Seam: [[3, -1], [32, -2]], Wheel: [[2, 6], [28, 9]],
+};
+function routePoints(e, name) {
+  const s = e.f[cur.S], outward = s[1] >= W / 2 ? 1 : -1;
+  return ROUTES[name].map(([d, o]) => [Math.min(119, s[0] + d * (o === 0 || d > 3 ? wi.depth : 1)), Math.max(1, Math.min(W - 1, s[1] + o * outward))]);
+}
+function covOptions() {
+  const p = cur.play, d = cur.tend.byDown[p.down] || cur.tend.all, man = pct(d.man, d.man + d.zone);
+  const tend = man >= 50 ? 'Man' : 'Zone';
+  return [
+    ['played', `As called: ${p.pff_passCoverage || '?'}`, `What ${p.defensiveTeam} really ran on this snap (${p.pff_passCoverageType})`],
+    ['tendency', `Their usual: ${tend}`, `${p.defensiveTeam} plays ${tend === 'Man' ? man : 100 - man}% ${tend.toLowerCase()} on ${p.down}${ORD[p.down]} down`],
+    ['Man', 'Man-to-man', 'Every cover player trails one receiver'],
+    ['Zone', 'Zone', 'Defenders drop to areas and break on whoever enters'],
+  ];
+}
+function renderWhatIf() {
+  if (!cur) return;
+  const recv = cur.ents.filter(canRoute).sort((a, b) => (b.role === 'Pass Route') - (a.role === 'Pass Route') || b.f[cur.S][1] - a.f[cur.S][1]);
+  const t = cur.ents.find(e => e.id === wi.target);
+  const edited = Object.keys(wi.edits).length;
+  $('#tab-whatif').innerHTML = `
+    <div class="step"><b><i>1</i> Pick a player to change</b>
+      <div class="recv">${recv.map(e => `<button data-r="${e.id}" class="${e.id === wi.target ? 'on' : ''}">#${e.jersey} ${e.name} <small>${e.pos} · ${wi.route[e.id] ? '✎ ' + wi.route[e.id] : e.role === 'Pass Route' ? 'ran a route' : 'stayed in to block'}</small></button>`).join('')}</div>
+      <p class="muted" style="margin:6px 0 0">…or click a dotted player on the field.</p></div>
+    <div class="step" ${t ? '' : 'style="opacity:.4;pointer-events:none"'}><b><i>2</i> Give ${t ? last(t.name) : 'him'} a new route</b>
+      <div class="grid">${Object.keys(ROUTES).map(r => `<button data-route="${r}" class="${t && wi.route[t.id] === r ? 'on' : ''}">${r}</button>`).join('')}</div>
+      <div class="row" style="margin-top:6px"><span class="muted">Depth</span>${[[0.7, 'Short'], [1, 'Normal'], [1.4, 'Deep']].map(([v, n]) => `<button data-depth="${v}" class="${wi.depth === v ? 'on' : ''}">${n}</button>`).join('')}</div>
+      <div class="row" style="margin-top:6px"><button id="drawBtn" class="${wi.drawing ? 'on' : ''}">✎ ${wi.drawing ? 'Click the field to add points…' : 'Draw my own'}</button>
+        ${t && wi.edits[t.id] ? `<button id="undoPt">Undo point</button><button id="rmRoute">Original route</button>` : ''}</div></div>
+    <div class="step"><b><i>3</i> Choose the defense call</b>
+      <div class="cov">${covOptions().map(([v, n, d]) => `<button data-cov="${v}" class="${wi.cov === v ? 'on' : ''}">${n}<small>${d}</small></button>`).join('')}</div></div>
+    ${edited || wi.cov !== 'played' ? '<button id="resetWi" style="width:100%">↺ Reset what-if</button>' : ''}
+`;
+  renderResults();
+}
+$('#tab-whatif').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const d = b.dataset, t = cur.ents.find(e => e.id === wi.target);
+  if (d.r) { wi.target = d.r; wi.drawing = false; renderWhatIf(); draw(); return; }
+  if (d.route) { wi.edits[t.id] = routePoints(t, d.route); wi.route[t.id] = d.route; wi.drawing = false; }
+  else if (d.depth) { wi.depth = +d.depth; for (const [id, r] of Object.entries(wi.route)) if (ROUTES[r]) wi.edits[id] = routePoints(cur.ents.find(e => e.id === id), r); }
+  else if (b.id === 'drawBtn') { wi.drawing = !wi.drawing; if (wi.drawing) { wi.edits[t.id] = []; wi.route[t.id] = 'Custom'; seek(cur.S); } }
+  else if (b.id === 'undoPt') wi.edits[t.id].pop();
+  else if (b.id === 'rmRoute') { delete wi.edits[t.id]; delete wi.route[t.id]; }
+  else if (d.cov) wi.cov = d.cov;
+  else if (b.id === 'resetWi') { wi.edits = {}; wi.route = {}; wi.cov = 'played'; wi.drawing = false; }
+  rerun();
+};
+// any change re-simulates and replays from the snap
+function rerun() {
+  for (const id in wi.edits) if (!wi.edits[id].length && !wi.drawing) { delete wi.edits[id]; delete wi.route[id]; }
+  const active = Object.values(wi.edits).some(p => p.length) || wi.cov !== 'played';
+  sim = active ? simulate() : null; viewSim = !!sim;
+  updateModeBadge(); renderMarks(); renderWhatIf();
+  frame = cur.S; playing = !!sim && !wi.drawing; syncPlay(); draw();
+}
+function updateModeBadge() {
+  $('#modeBadge').hidden = !sim;
+  $$('#modeBadge button').forEach(b => b.classList.toggle('on', (b.dataset.m === 'sim') === viewSim));
+}
+$('#modeBadge').onclick = e => { const m = e.target.dataset.m; if (!m) return; viewSim = m === 'sim'; frame = Math.min(frame, maxFrame()); updateModeBadge(); renderMarks(); draw(); };
+
+function renderResults() {
+  if (!sim) { $('#results').innerHTML = tab === 'whatif' ? '<p class="muted">Changes play out instantly on the field: gold = new route, dashed ring = where the real player was.</p>' : ''; return; }
+  const was = viewSim, rows = cur.ents.filter(e => e.off && (e.role === 'Pass Route' || sim.pos[e.id])).map(e => {
+    viewSim = false; const real = separation(e, cur.E); viewSim = true; const now = separation(e, cur.E); return { e, real, now };
+  });
+  viewSim = was;
+  const best = rows.reduce((a, b) => b.now > a.now ? b : a), bestReal = rows.reduce((a, b) => b.real > a.real ? b : a);
+  const v = s => s >= 3 ? ['open', 'OPEN'] : s >= 1.5 ? ['tight', 'TIGHT'] : ['covered', 'COVERED'];
+  $('#results').innerHTML = `<div class="card"><div class="muted">Defense played <b style="color:var(--text)">${sim.mode}</b> · at the ${/sack/.test(cur.endEvent) ? 'sack' : 'throw'} (${((cur.E - cur.S) / 10).toFixed(1)}s)</div>
+    <div class="headline" style="margin:6px 0">Best read: #${best.e.jersey} ${best.e.name}, ${best.now.toFixed(1)} yds open</div>
+    <div class="muted" style="margin-bottom:8px">In the real play it was #${bestReal.e.jersey} ${last(bestReal.e.name)} (${bestReal.real.toFixed(1)} yds).</div>
+    <div class="res"><span class="muted">Receiver</span><span class="muted">Real → What-if</span><span></span>
+    ${rows.map(({ e, real, now }) => { const [c, l] = v(now), d = now - real;
+      return `<span>#${e.jersey} ${last(e.name)}${wi.route[e.id] ? ` <span class="warn">✎ ${wi.route[e.id]}</span>` : ''}</span>
+        <span>${real.toFixed(1)} → <b>${now.toFixed(1)}</b> <span class="${d > 0.3 ? 'good' : d < -0.3 ? 'bad' : 'muted'}">${d >= 0 ? '+' : ''}${d.toFixed(1)}</span></span><span class="verdict ${c}">${l}</span>`; }).join('')}
+    </div></div>
+    <p class="muted">Open = 3+ yds from the nearest defender, tight = 1.5–3. Toggle <b>Original / What-if</b> on the field to compare.</p>`;
+}
+
+// ================= the what-if engine =================
+// Offense: edited players run the new route (accelerate, slow down at cuts). Everyone else keeps real tracking.
 // Defense: each cover defender is tied to the receiver he shadowed most in the real play.
-//  - same coverage as played: real track + reaction to the edited receiver's change (man: full, zone: only inside his area)
+//  - same coverage as played: real track + reaction to the edited receiver (man: full, zone: only near his area)
 //  - forced man: trail the assigned receiver, closing the snap cushion
 //  - forced zone: drop to a landmark and break on whichever receiver enters the area
 // Movement is capped by each defender's real top speed, 7 yd/s² accel and a 0.3s reaction delay.
+// ponytail: hand-tuned reaction rules, swap for a model trained on the tracking data if accuracy matters.
 const LAG = 3, DT = 0.1, AMAX = 7;
-function simulate(choice) {
-  const { S, E } = cur, played = cur.play.pff_passCoverageType;
-  const mode = choice === 'played' ? played : choice === 'tendency' ? tendencyCoverage() : choice;
-  const off = cur.ents.filter(e => e.team === cur.play.possessionTeam);
-  const cover = cur.ents.filter(e => e.team === cur.play.defensiveTeam && e.role === 'Coverage');
+function simulate() {
+  const { S, E, los } = cur, edits = Object.fromEntries(Object.entries(wi.edits).filter(([, p]) => p.length));
+  const played = cur.play.pff_passCoverageType;
+  const mode = wi.cov === 'played' ? played : wi.cov === 'tendency' ? covOptions()[1][1].split(': ')[1] : wi.cov;
+  const off = cur.ents.filter(e => e.off && e.id !== 'ball');
+  const cover = cur.ents.filter(e => !e.off && e.role === 'Coverage');
   const routes = off.filter(e => e.role === 'Pass Route' || edits[e.id]);
-  const out = { pos: {}, mode, played };
+  const out = { pos: {}, mode };
 
-  // 1. offense routes
   for (const e of off) {
-    const pts = edits[e.id]; if (!pts?.length) continue;
+    const pts = edits[e.id]; if (!pts) continue;
     const track = e.f.slice(0, S + 1), top = Math.max(7, ...e.f.map(f => f[2]));
-    let p = e.f[S].slice(0, 2), v = e.f[S][2], i = 0, heading = 0;
+    let p = e.f[S].slice(0, 2), v = e.f[S][2], i = 0;
     for (let f = S + 1; f <= E; f++) {
       v = Math.min(top, v + 5 * DT);
-      let step = v * DT;
-      while (step > 0 && i < pts.length) {
+      let stepLen = v * DT;
+      while (stepLen > 0 && i < pts.length) {
         const d = dist(p, pts[i]);
-        if (d > step) { p = [p[0] + (pts[i][0] - p[0]) * step / d, p[1] + (pts[i][1] - p[1]) * step / d]; step = 0; }
-        else { // reach waypoint, slow down for the cut
-          step -= d; p = pts[i].slice(); i++;
-          if (i < pts.length) { const prev = Math.atan2(p[0] - (pts[i - 2] || e.f[S])[0], p[1] - (pts[i - 2] || e.f[S])[1]);
-            const next = Math.atan2(pts[i][0] - p[0], pts[i][1] - p[1]); let turn = Math.abs(next - prev); if (turn > Math.PI) turn = 2 * Math.PI - turn;
-            v *= 1 - 0.55 * turn / Math.PI; }
+        if (d > stepLen) { p = [p[0] + (pts[i][0] - p[0]) * stepLen / d, p[1] + (pts[i][1] - p[1]) * stepLen / d]; stepLen = 0; }
+        else {
+          stepLen -= d; p = pts[i].slice(); i++;
+          if (i < pts.length) { const a = pts[i - 2] || e.f[S], prev = Math.atan2(p[0] - a[0], p[1] - a[1]), next = Math.atan2(pts[i][0] - p[0], pts[i][1] - p[1]);
+            let turn = Math.abs(next - prev); if (turn > Math.PI) turn = 2 * Math.PI - turn; v *= 1 - 0.55 * turn / Math.PI; }
         }
       }
-      if (i >= pts.length) v = Math.max(0, v - 8 * DT); // settle at route end
-      const q = track[f - 1]; heading = Math.atan2(p[0] - q[0], p[1] - q[1]) * 180 / Math.PI;
-      track[f] = [p[0], p[1], v, (heading + 360) % 360, heading];
+      if (i >= pts.length) v = Math.max(0, v - 8 * DT);
+      const q = track[f - 1], h = (Math.atan2(p[0] - q[0], p[1] - q[1]) * 180 / Math.PI + 360) % 360;
+      track[f] = [p[0], p[1], v, h, h];
     }
     out.pos[e.id] = track;
   }
   const R = (e, f) => (out.pos[e.id] || e.f)[Math.max(S, f)];
 
-  // 2. who was each cover defender responsible for? (receiver he stayed closest to on average)
   const assign = {};
   for (const d of cover) {
     let best = null, bestD = Infinity;
     for (const r of routes) { let s = 0; for (let f = S; f <= E; f++) s += dist(d.f[f], r.f[f]); if (s < bestD) { bestD = s; best = r; } }
     assign[d.id] = best;
   }
+  const editedEnts = Object.keys(edits).map(id => cur.ents.find(e => e.id === id));
 
-  // 3. defenders react
   for (const d of cover) {
     const a = assign[d.id]; if (!a) continue;
     const sameMode = mode === played || (played !== 'Man' && played !== 'Zone');
-    if (sameMode && !Object.keys(edits).some(id => mode === 'Man' ? id === a.id : true)) continue; // nothing changed for him
+    if (sameMode && mode === 'Man' && !edits[a.id]) continue;
+    if (sameMode && mode !== 'Man' && !editedEnts.some(r => { for (let f = S; f <= E; f++) if (dist(R(r, f), d.f[f]) < 10) return true; })) continue;
     const top = Math.max(6, ...d.f.map(f => f[2])) * 1.03;
-    const snapOff = [d.f[S][0] - a.f[S][0], d.f[S][1] - a.f[S][1]], snapDepth = Math.abs(d.f[S][0] - cur.play.absoluteYardlineNumber);
-    const land = [cur.play.absoluteYardlineNumber + cur.sgn * (snapDepth > 9 ? Math.max(snapDepth, 14) : 8), d.f[S][1]];
-    const track = d.f.slice(0, S + 1);
-    let p = d.f[S].slice(0, 2), vel = [(d.f[S][0] - d.f[S - 1 < 0 ? 0 : S - 1][0]) / DT, (d.f[S][1] - d.f[S - 1 < 0 ? 0 : S - 1][1]) / DT];
+    const snapOff = [d.f[S][0] - a.f[S][0], d.f[S][1] - a.f[S][1]], snapDepth = Math.abs(d.f[S][0] - los);
+    const land = [los + (snapDepth > 9 ? Math.max(snapDepth, 14) : 8), d.f[S][1]];
+    const track = d.f.slice(0, S + 1), p0 = d.f[Math.max(0, S - 1)];
+    let p = d.f[S].slice(0, 2), vel = [(d.f[S][0] - p0[0]) / DT, (d.f[S][1] - p0[1]) / DT];
     for (let f = S + 1; f <= E; f++) {
       const t = f - S, lf = f - LAG;
       let tgt;
-      if (sameMode && mode === 'Man') { // real track shifted by how much his man moved off the original route
-        const n = R(a, lf), o = a.f[Math.max(S, lf)]; tgt = [d.f[f][0] + n[0] - o[0], d.f[f][1] + n[1] - o[1]];
-      } else if (sameMode) { // zone: react to any edited receiver near his real zone position
+      if (sameMode && mode === 'Man') { const n = R(a, lf), o = a.f[Math.max(S, lf)]; tgt = [d.f[f][0] + n[0] - o[0], d.f[f][1] + n[1] - o[1]]; }
+      else if (sameMode) {
         tgt = d.f[f].slice(0, 2);
-        for (const id of Object.keys(edits)) {
-          const r = cur.ents.find(e => e.id === id), n = R(r, lf), o = r.f[Math.max(S, lf)];
-          const w = Math.max(0, Math.min(1, 1 - (dist(n, d.f[f]) - 3) / 7));
-          tgt = [tgt[0] + w * (n[0] - o[0]), tgt[1] + w * (n[1] - o[1])];
-        }
-      } else if (mode === 'Man') { // forced man: trail assigned receiver, cushion shrinks over 2s
-        const n = R(a, lf), k = Math.max(0.15, 1 - t / 20); tgt = [n[0] + snapOff[0] * k, n[1] + snapOff[1] * k];
-      } else { // forced zone: drop to landmark, break on closest receiver in area
-        const k = Math.min(1, t / 15), anchor = [d.f[S][0] + (land[0] - d.f[S][0]) * k, d.f[S][1] + (land[1] - d.f[S][1]) * k];
+        for (const r of editedEnts) { const n = R(r, lf), o = r.f[Math.max(S, lf)], w = Math.max(0, Math.min(1, 1 - (dist(n, d.f[f]) - 3) / 7));
+          tgt = [tgt[0] + w * (n[0] - o[0]), tgt[1] + w * (n[1] - o[1])]; }
+      } else if (mode === 'Man') { const n = R(a, lf), c = Math.max(0.15, 1 - t / 20); tgt = [n[0] + snapOff[0] * c, n[1] + snapOff[1] * c]; }
+      else {
+        const c = Math.min(1, t / 15), anchor = [d.f[S][0] + (land[0] - d.f[S][0]) * c, d.f[S][1] + (land[1] - d.f[S][1]) * c];
         let near = null, nd = 7; for (const r of routes) { const q = R(r, lf), dd = dist(q, anchor); if (dd < nd) { nd = dd; near = q; } }
         tgt = near ? [anchor[0] + (near[0] - anchor[0]) * 0.8, anchor[1] + (near[1] - anchor[1]) * 0.8] : anchor;
       }
-      // kinematics: arrive at target, limited accel + top speed
       const dx = tgt[0] - p[0], dy = tgt[1] - p[1], dd = Math.hypot(dx, dy) || 1e-6;
       const want = Math.min(top, dd / 0.3), dv = [dx / dd * want - vel[0], dy / dd * want - vel[1]], dm = Math.hypot(...dv);
       if (dm > AMAX * DT) { dv[0] *= AMAX * DT / dm; dv[1] *= AMAX * DT / dm; }
-      vel = [vel[0] + dv[0], vel[1] + dv[1]];
-      p = [p[0] + vel[0] * DT, p[1] + vel[1] * DT];
+      vel = [vel[0] + dv[0], vel[1] + dv[1]]; p = [p[0] + vel[0] * DT, p[1] + vel[1] * DT];
       const s = Math.hypot(...vel), h = (Math.atan2(vel[0], vel[1]) * 180 / Math.PI + 360) % 360;
       track[f] = [p[0], p[1], s, h, h];
     }
     out.pos[d.id] = track;
   }
   return out;
-}
-function report() {
-  const { E } = cur, ids = Object.keys(edits).filter(id => edits[id].length);
-  $('#simOut').innerHTML = ids.length ? '' : 'No routes drawn — replaying with the chosen coverage only.';
-  const lines = cur.ents.filter(e => e.role === 'Pass Route' || ids.includes(e.id)).map(e => {
-    const real = (() => { const s = sim; sim = null; const v = separation(e, E); sim = s; return v; })();
-    const now = separation(e, E), diff = now - real;
-    return `<div>#${e.jersey} ${e.name}: <b class="${now > 3 ? 'good' : now < 1.5 ? 'bad' : ''}">${now.toFixed(1)} yds</b> open at the throw (real: ${real.toFixed(1)}, <span class="${diff > 0 ? 'good' : 'bad'}">${diff >= 0 ? '+' : ''}${diff.toFixed(1)}</span>)${ids.includes(e.id) ? ' ✎' : ''}</div>`;
-  });
-  const why = $('#cov').value === 'tendency' ? ` (${cur.play.defensiveTeam} plays mostly ${sim.mode.toLowerCase()} on ${cur.play.down}${['', 'st', 'nd', 'rd', 'th'][cur.play.down]} down)` : '';
-  $('#simOut').innerHTML += `<p>Defense played <b>${sim.mode}</b>${why}; real call was ${cur.play.pff_passCoverage} (${sim.played}). Separation at frame ${E + 1} (${cur.events[E] || 'end'}):</p>` + lines.join('');
 }
 </script>
 </body>
